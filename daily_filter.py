@@ -2,16 +2,20 @@ import os
 import requests
 import feedparser
 import time
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
+import json
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from google import genai
 from google.genai import types
 
 # --- Configuration Section ---
-# Let's test with just Mint channel first for debugging
 CHANNELS_TO_WATCH = {
     "Mint": {
         "id": "UCUI9vm69ZbAqRK3q3vKLWCQ",
-        "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi", "trade agreement", "FTA", "free trade agreement", "international trade"]
+        "keywords": ["Indian economy", "economics", "india international trade", 
+                    "india government schemes", "tax", "gdp", "inflation", 
+                    "budget", "economic survey", "rbi", "trade agreement", 
+                    "FTA", "free trade agreement", "international trade",
+                    "de-dollarisation", "trade deal", "India-EU"]
     }
 }
 
@@ -21,7 +25,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 print("=" * 80)
-print("DEBUG MODE: YouTube Monitor with Detailed Logging")
+print("FIXED VERSION: Using YouTube API for transcripts")
 print("=" * 80)
 
 def send_telegram_message(message_text):
@@ -52,8 +56,53 @@ def send_telegram_message(message_text):
         print(f"✗ Telegram API error: {e}")
         return False
 
+def get_transcript_with_retry(video_id, video_title):
+    """Try multiple methods to get transcript."""
+    print(f"\n🎬 Getting transcript for: {video_title[:60]}...")
+    print(f"   Video ID: {video_id}")
+    
+    methods = [
+        # Method 1: Try with specific languages
+        lambda: YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'hi']),
+        
+        # Method 2: Try without language filter (gets any available)
+        lambda: YouTubeTranscriptApi.get_transcript(video_id),
+        
+        # Method 3: Try to list available transcripts first
+        lambda: YouTubeTranscriptApi.list_transcripts(video_id),
+    ]
+    
+    for i, method in enumerate(methods):
+        try:
+            print(f"   Method {i+1}: Trying...")
+            result = method()
+            
+            if i == 2:  # list_transcripts method
+                print(f"   Available transcripts: {[t.language_code for t in result]}")
+                # Try to get the first available transcript
+                if result:
+                    transcript = result[0].fetch()
+                    print(f"   ✓ Got transcript using list_transcripts method")
+                    transcript_text = ' '.join([t['text'] for t in transcript])
+                    return transcript_text
+            
+            else:  # get_transcript methods
+                print(f"   ✓ Got transcript using method {i+1}")
+                transcript_text = ' '.join([t['text'] for t in result])
+                return transcript_text
+                
+        except (TranscriptsDisabled, NoTranscriptFound) as e:
+            print(f"   ✗ No transcript available: {type(e).__name__}")
+            return None
+        except Exception as e:
+            print(f"   ✗ Method {i+1} failed: {type(e).__name__}")
+            continue
+    
+    print("   ❌ All methods failed to get transcript")
+    return None
+
 def analyze_transcript_with_gemini(transcript, keywords, video_title):
-    """Uses Gemini to determine if transcript is relevant to AT LEAST ONE keyword."""
+    """Uses Gemini to determine if transcript is relevant."""
     if not GEMINI_API_KEY:
         print("ERROR: Gemini API Key missing.")
         return False
@@ -62,220 +111,120 @@ def analyze_transcript_with_gemini(transcript, keywords, video_title):
         client = genai.Client(api_key=GEMINI_API_KEY)
         keyword_list = ", ".join(keywords)
         
-        # Show what we're sending to Gemini
-        print(f"\n📋 SENDING TO GEMINI FOR ANALYSIS:")
-        print(f"   Video Title: {video_title}")
+        print(f"\n📋 ANALYZING WITH GEMINI:")
+        print(f"   Video: {video_title}")
         print(f"   Looking for ANY of: {keyword_list}")
-        print(f"   Transcript length: {len(transcript)} characters")
-        print(f"   First 500 chars of transcript: {transcript[:500]}...")
         
-        # Limit transcript length
-        transcript_short = transcript[:10000] if len(transcript) > 10000 else transcript
-        
+        # Use a better prompt
         prompt = f"""
         VIDEO TITLE: {video_title}
         
-        TRANSCRIPT:
-        {transcript_short}
+        TRANSCRIPT (partial):
+        {transcript[:3000]}
         
-        QUESTION: Is this video about ANY of these topics? (Answer YES if it's about at least one):
+        QUESTION: Is this video related to ANY of these topics? (Answer YES if related to at least one):
         {keyword_list}
         
-        IMPORTANT: Consider partial matches and related concepts. For example:
-        - "India-EU FTA" matches "international trade", "trade agreement", "FTA"
-        - "Economic partnership" matches "economics", "Indian economy"
-        - "Budget discussion" matches "budget", "Indian economy"
+        IMPORTANT CONSIDERATIONS:
+        1. "India-EU deal" matches "trade agreement", "FTA", "international trade", "India-EU"
+        2. "De-dollarisation" matches "Indian economy", "economics", "international trade"
+        3. "Budget 2026" matches "budget", "Indian economy", "tax"
+        4. Consider synonyms and related terms
         
-        Respond with ONLY this JSON format: {{"relevant": true}} or {{"relevant": false}}
-        No other text.
+        Respond with ONLY: {{"relevant": true}} or {{"relevant": false}}
         """
-        
-        print(f"\n🤖 SENDING PROMPT TO GEMINI...")
         
         response = client.models.generate_content(
             model='gemini-1.5-flash',
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
-                max_output_tokens=100
+                max_output_tokens=50
             )
         )
         
-        # Show raw response
         response_text = response.text.strip()
-        print(f"\n📝 GEMINI RAW RESPONSE: {response_text}")
-        print(f"   Response length: {len(response_text)} characters")
+        print(f"🤖 Gemini response: {response_text}")
         
-        # More robust parsing
-        response_lower = response_text.lower()
-        if '"relevant": true' in response_lower or "'relevant': true" in response_lower or 'true' in response_lower:
-            print("✅ GEMINI DECISION: RELEVANT (matches at least one topic)")
+        # Parse response
+        if '"relevant": true' in response_text or "'relevant': true" in response_text:
+            print("✅ Gemini: RELEVANT")
             return True
-        elif '"relevant": false' in response_lower or "'relevant': false" in response_lower or 'false' in response_lower:
-            print("❌ GEMINI DECISION: NOT RELEVANT")
-            return False
         else:
-            print("⚠️ GEMINI DECISION: Could not parse response, defaulting to false")
-            print(f"   Unusual response: {response_text}")
+            print("❌ Gemini: NOT RELEVANT")
             return False
 
     except Exception as e:
-        print(f"🚨 GEMINI ANALYSIS FAILED: {type(e).__name__}: {e}")
+        print(f"🚨 Gemini analysis failed: {e}")
         return False
 
-def get_latest_videos(channel_id, channel_name):
-    """Fetches ALL videos from the last 24 hours with detailed debugging."""
+def get_latest_videos(channel_id):
+    """Fetches videos from the last 24 hours."""
     feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     
-    print(f"\n📡 FETCHING VIDEOS FOR: {channel_name}")
-    print(f"   RSS URL: {feed_url}")
+    print(f"\n📡 Fetching RSS: {feed_url}")
     
     try:
-        # Add timeout and user-agent
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(feed_url, headers=headers, timeout=30)
-        print(f"   RSS HTTP Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"   ⚠️ Failed to fetch RSS: HTTP {response.status_code}")
-            return []
-            
-        feed = feedparser.parse(response.content)
-        
-        print(f"   Feed title: {feed.feed.get('title', 'Unknown')}")
-        print(f"   Total entries in feed: {len(feed.entries)}")
-        
+        feed = feedparser.parse(feed_url)
         videos = []
-        video_count = 0
         
-        current_time = time.time()
-        print(f"   Current time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_time))}")
-        
-        for i, entry in enumerate(feed.entries):
+        for entry in feed.entries:
             try:
-                print(f"\n   Entry #{i+1}: {entry.get('title', 'No title')[:60]}...")
-                
                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
                     published_timestamp = time.mktime(entry.published_parsed)
-                    published_str = time.strftime('%Y-%m-%d %H:%M:%S', entry.published_parsed)
                     
-                    time_diff = current_time - published_timestamp
-                    hours_diff = time_diff / 3600
-                    
-                    print(f"     Published: {published_str} ({hours_diff:.1f} hours ago)")
-                    
-                    # Check if video from last 24 hours
-                    if time_diff < 86400:
-                        # Extract video ID from URL
-                        video_link = entry.link
-                        print(f"     Link: {video_link}")
-                        
-                        if 'v=' in video_link:
-                            video_id = video_link.split('v=')[1].split('&')[0]
-                            video_title = entry.title
-                            
-                            print(f"     Video ID: {video_id}")
-                            print(f"     ✅ WITHIN 24 HOURS - Adding to check list")
-                            
+                    if time.time() - published_timestamp < 86400:
+                        if 'v=' in entry.link:
+                            video_id = entry.link.split('v=')[1].split('&')[0]
                             videos.append({
-                                'title': video_title,
-                                'link': video_link,
+                                'title': entry.title,
+                                'link': entry.link,
                                 'id': video_id,
-                                'published': published_str,
-                                'hours_ago': hours_diff
+                                'published': time.strftime('%Y-%m-%d %H:%M:%S', entry.published_parsed)
                             })
-                            video_count += 1
-                        else:
-                            print(f"     ⚠️ Could not extract video ID from link")
-                    else:
-                        print(f"     ⚫ OLDER THAN 24 HOURS - Skipping")
-                else:
-                    print(f"     ⚠️ No publish date found")
-                    
-            except Exception as e:
-                print(f"     🚨 Error parsing entry: {e}")
+            except:
                 continue
                 
-        print(f"\n   ✓ Found {video_count} videos from last 24 hours")
+        print(f"✓ Found {len(videos)} videos from last 24 hours")
         return videos
         
     except Exception as e:
-        print(f"   🚨 Failed to fetch RSS feed: {type(e).__name__}: {e}")
+        print(f"✗ Failed to fetch RSS: {e}")
         return []
 
-def test_video_transcript(video_id, video_title):
-    """Test if we can get transcript for a specific video."""
-    print(f"\n🎬 TESTING TRANSCRIPT FOR: {video_title[:60]}...")
-    print(f"   Video ID: {video_id}")
-    
-    try:
-        # Try multiple language options
-        languages_to_try = ['en', 'hi', 'en-US', 'en-IN', 'en-GB']
-        
-        for lang in languages_to_try:
-            try:
-                print(f"   Trying language: {lang}")
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=[lang])
-                transcript_text = ' '.join([t['text'] for t in transcript_list])
-                
-                print(f"   ✅ SUCCESS: Found transcript in {lang}")
-                print(f"   Transcript length: {len(transcript_text)} characters")
-                print(f"   Sample: {transcript_text[:300]}...")
-                
-                return transcript_text
-                
-            except Exception as lang_error:
-                print(f"   ⚠️ No transcript in {lang}: {type(lang_error).__name__}")
-                continue
-        
-        print("   ❌ No transcript found in any language")
-        return None
-        
-    except TranscriptsDisabled:
-        print("   ❌ Transcripts disabled for this video")
-        return None
-    except Exception as e:
-        print(f"   🚨 Error getting transcript: {type(e).__name__}: {e}")
-        return None
-
 def main():
-    """Main execution function with detailed debugging."""
+    """Main execution function."""
     print("\n" + "=" * 80)
-    print("STARTING DEBUG SESSION")
+    print("STARTING ANALYSIS")
     print("=" * 80)
     
-    # Send start notification
-    send_telegram_message("🔍 YouTube Monitor Debug Session Started")
+    send_telegram_message("🔍 YouTube Monitor Started - Testing Transcript Methods")
     
-    relevant_videos_summary = []
+    relevant_videos = []
     
     for channel_name, config in CHANNELS_TO_WATCH.items():
-        print(f"\n{'='*40}")
-        print(f"CHANNEL: {channel_name}")
-        print(f"{'='*40}")
-        print(f"Channel ID: {config['id']}")
-        print(f"Keywords: {config['keywords']}")
+        print(f"\n🔍 Checking: {channel_name}")
         
-        # Get videos
-        videos = get_latest_videos(config["id"], channel_name)
+        videos = get_latest_videos(config["id"])
         
-        if not videos:
-            print(f"\n❌ NO VIDEOS FOUND in last 24 hours for {channel_name}")
-            continue
-            
-        print(f"\n📊 PROCEEDING TO CHECK {len(videos)} VIDEOS:")
-        
-        for i, video in enumerate(videos):
+        for video in videos:
             print(f"\n{'─'*60}")
-            print(f"VIDEO #{i+1}/{len(videos)}: {video['title']}")
-            print(f"{'─'*60}")
+            print(f"📺 {video['title']}")
+            print(f"   Published: {video['published']}")
+            print(f"   Link: {video['link']}")
             
-            # Test transcript retrieval first
-            transcript = test_video_transcript(video['id'], video['title'])
+            # Try to get transcript
+            transcript = get_transcript_with_retry(video['id'], video['title'])
             
             if transcript:
+                print(f"   Transcript length: {len(transcript)} chars")
+                
+                # Check if it's about Indian economy/trade
+                if any(keyword.lower() in video['title'].lower() for keyword in 
+                      ['india-eu', 'trade', 'economy', 'budget', 'FTA', 'de-dollar']):
+                    print(f"   ⚠️ Title suggests it might be relevant")
+                
                 # Analyze with Gemini
-                print(f"\n🔍 ANALYZING WITH GEMINI...")
                 is_relevant = analyze_transcript_with_gemini(
                     transcript, 
                     config["keywords"],
@@ -283,47 +232,36 @@ def main():
                 )
                 
                 if is_relevant:
-                    print(f"\n🎯 RESULT: ✅ RELEVANT - Adding to notification")
-                    relevant_videos_summary.append(f"• [{video['title']}]({video['link']}) - {channel_name} ({video['hours_ago']:.1f}h ago)")
+                    relevant_videos.append(f"• [{video['title']}]({video['link']})")
+                    print(f"   ✅ ADDED TO LIST")
                 else:
-                    print(f"\n🎯 RESULT: ❌ NOT RELEVANT")
+                    print(f"   ❌ NOT ADDED")
             else:
-                print(f"\n🎯 RESULT: ⚠️ SKIPPED - No transcript available")
+                print(f"   ⚠️ No transcript available")
+                
+                # Fallback: Check if title contains keywords
+                title_lower = video['title'].lower()
+                keywords_lower = [k.lower() for k in config["keywords"]]
+                
+                if any(keyword in title_lower for keyword in 
+                      ['india-eu', 'trade deal', 'fta', 'de-dollar', 'budget', 'economy']):
+                    print(f"   ⚠️ Title suggests relevance but no transcript")
+                    # We could add a simple title-based check here
+                    # For now, let's be conservative and not add without transcript
     
     print(f"\n{'='*80}")
-    print("DEBUG SESSION COMPLETE")
+    print("RESULTS SUMMARY")
     print(f"{'='*80}")
+    print(f"Relevant videos found: {len(relevant_videos)}")
     
-    # Summary
-    print(f"\n📈 SUMMARY:")
-    print(f"   Channels checked: {len(CHANNELS_TO_WATCH)}")
-    print(f"   Videos found in last 24h: {sum(1 for _ in CHANNELS_TO_WATCH for videos in [get_latest_videos(config['id'], name)])}")
-    print(f"   Relevant videos found: {len(relevant_videos_summary)}")
-    
-    # Send results
-    if relevant_videos_summary:
-        message = "🚨 **DEBUG: Relevant Videos Found:**\n\n" + "\n".join(relevant_videos_summary)
+    if relevant_videos:
+        message = "🚨 **Relevant YouTube Videos Found:**\n\n" + "\n".join(relevant_videos)
         send_telegram_message(message)
-        print(f"\n✅ Sent Telegram notification with {len(relevant_videos_summary)} videos")
+        print(f"\n✅ Sent notification with {len(relevant_videos)} videos")
     else:
-        # Send debug info to Telegram
-        debug_info = f"""
-🔍 **DEBUG REPORT - No Videos Found**
-
-**Channels Checked:** {len(CHANNELS_TO_WATCH)}
-**Time of Check:** {time.strftime('%Y-%m-%d %H:%M:%S %Z')}
-
-**Possible Issues:**
-1. No videos uploaded in last 24 hours
-2. Transcripts not available
-3. Gemini API issues
-4. RSS feed not working
-
-**Test Search:**
-Check Mint channel manually for India-EU FTA videos.
-        """
-        send_telegram_message(debug_info)
-        print(f"\n⚠️ No relevant videos found. Sent debug report to Telegram.")
+        message = "✅ No relevant videos found with available transcripts in last 24 hours."
+        send_telegram_message(message)
+        print(f"\n✅ Sent 'no videos' notification")
 
 if __name__ == "__main__":
     main()
