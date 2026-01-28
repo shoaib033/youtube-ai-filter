@@ -69,7 +69,7 @@ def send_telegram_message(message_text):
         print("ERROR: Telegram credentials missing.")
         return
 
-    url = f"https://api.telegram.org{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         'chat_id': TELEGRAM_CHAT_ID,
         'text': message_text,
