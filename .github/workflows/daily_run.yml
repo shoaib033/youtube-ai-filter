@@ -14,12 +14,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies and run the script
+      - name: Run the script using direct inline environment variables
         run: |
           pip install feedparser youtube-transcript-api google-genai requests
-          python daily_filter.py
-        env:
-          # Pass the secrets securely to the script environment
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          
+          # This command injects all variables inline before executing the script
+          GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" TELEGRAM_CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}" python daily_filter.py
