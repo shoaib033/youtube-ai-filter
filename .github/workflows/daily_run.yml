@@ -1,0 +1,25 @@
+name: Daily YouTube AI Filter Run
+
+on:
+  schedule:
+    # Runs everyday at 9:00 PM IST (which is 15:30 UTC)
+    - cron: '30 15 * * *' 
+  workflow_dispatch:
+    # Allows manual triggering for immediate testing
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies and run the script
+        run: |
+          pip install feedparser youtube-transcript-api google-genai requests
+          python daily_filter.py
+        env:
+          # Pass the secrets securely to the script environment
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
