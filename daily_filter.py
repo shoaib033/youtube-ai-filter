@@ -6,7 +6,7 @@ from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
 from google import genai
 from google.genai import types
 
-# --- Configuration Section (EDIT THIS) ---
+# --- Configuration Section (EDIT THIS with your IDs and Keywords) ---
 CHANNELS_TO_WATCH = {
     "Mint": {
         "id": "UCUI9vm69ZbAqRK3q3vKLWCQ", # REPLACE THIS with actual channel ID
@@ -50,7 +50,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 def send_telegram_message(message_text):
     """Sends a notification message via Telegram bot."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram credentials missing, cannot send message.")
+        print("ERROR: Telegram credentials missing.")
         return
 
     url = f"https://api.telegram.org{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -62,13 +62,14 @@ def send_telegram_message(message_text):
     }
     response = requests.post(url, data=payload)
     if response.status_code == 200:
-        print("Telegram message sent successfully.")
+        print("LOG: Telegram message sent successfully.")
     else:
-        print(f"Failed to send Telegram message: {response.text}")
+        print(f"ERROR: Failed to send Telegram message. Status Code: {response.status_code}, Response: {response.text}")
 
 def analyze_transcript_with_gemini(transcript, keywords):
     """Uses Gemini to determine if transcript is relevant to keywords."""
     if not GEMINI_API_KEY:
+        print("ERROR: Gemini API Key missing.")
         return False
 
     try:
@@ -76,7 +77,7 @@ def analyze_transcript_with_gemini(transcript, keywords):
         keyword_list = ", ".join(keywords)
         
         prompt = f"""
-        Analyze the provided YouTube video transcript. Determine if the main topic of the video is directly related to any of the following: 
+        Analyze the provided YouTube video transcript. Determine if the main topic of the video is directly related to any of the following keywords: 
         "{keyword_list}".
 
         Respond with a simple JSON object: {{"relevant": true}} if relevant, or {{"relevant": false}} if not. 
@@ -92,10 +93,12 @@ def analyze_transcript_with_gemini(transcript, keywords):
             )
         )
         
-        return response.candidates.content.parts.json["relevant"]
+        relevance = response.candidates.content.parts.json["relevant"]
+        print(f"LOG: Gemini analysis complete. Result: {relevance}")
+        return relevance
 
     except Exception as e:
-        print(f"Gemini analysis failed: {e}")
+        print(f"ERROR: Gemini analysis failed: {e}")
         return False
 
 def get_latest_videos(channel_id):
@@ -114,7 +117,7 @@ def main():
     relevant_videos_summary = []
 
     for channel_name, config in CHANNELS_TO_WATCH.items():
-        print(f"Checking {channel_name}...")
+        print(f"LOG: Checking {channel_name}...")
         latest_videos = get_latest_videos(config["id"])
         
         for video in latest_videos:
@@ -124,20 +127,23 @@ def main():
                 
                 if analyze_transcript_with_gemini(transcript_text, config["keywords"]):
                     relevant_videos_summary.append(f"* [{video['title']}]({video['link']}) (Channel: {channel_name})")
-                    print(f"  > Matched: {video['title']}")
+                    print(f"LOG: Matched video: {video['title']}")
                 else:
-                    print(f"  > Not relevant: {video['title']}")
+                    print(f"LOG: Not relevant video: {video['title']}")
 
             except TranscriptsDisabled:
-                print(f"  > Transcripts disabled for video {video['id']}, skipping analysis.")
+                print(f"WARN: Transcripts disabled for video {video['id']}, skipping analysis.")
             except Exception as e:
-                print(f"  > An unexpected error occurred while processing video {video['id']}: {e}")
+                print(f"ERROR: An unexpected error occurred while processing video {video['id']}: {e}")
 
     if relevant_videos_summary:
+        # Send message with list of videos if found
         message = "🚨 **New Relevant YouTube Videos Found:**\n\n" + "\n".join(relevant_videos_summary)
         send_telegram_message(message)
     else:
-        print("No new relevant videos found in the last 24 hours.")
+        # Send a "No videos found" message if list is empty
+        message = "✅ **Daily YouTube Check:** No relevant videos found in the last 24 hours matching your criteria."
+        send_telegram_message(message)
 
 if __name__ == "__main__":
     main()
