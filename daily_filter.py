@@ -47,6 +47,22 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# --- DEBUGGING LINES ---
+if GEMINI_API_KEY:
+    print("DEBUG: Gemini API Key found.")
+else:
+    print("DEBUG: Gemini API Key MISSING.")
+if TELEGRAM_BOT_TOKEN:
+    print("DEBUG: Telegram Token found (Length:", len(TELEGRAM_BOT_TOKEN), ").")
+else:
+    print("DEBUG: Telegram Token MISSING.")
+if TELEGRAM_CHAT_ID:
+    print("DEBUG: Telegram Chat ID found.")
+else:
+    print("DEBUG: Telegram Chat ID MISSING.")
+# --- END DEBUGGING LINES ---
+
+
 def send_telegram_message(message_text):
     """Sends a notification message via Telegram bot."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
