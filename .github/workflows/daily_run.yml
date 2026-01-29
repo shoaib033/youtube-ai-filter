@@ -2,71 +2,36 @@ name: Daily YouTube AI Filter Run
 
 on:
   schedule:
-    - cron: '30 15 * * *'  # Runs daily at 9:00 PM IST (15:30 UTC)
-  workflow_dispatch:  # Allows manual triggering
+    - cron: '30 15 * * *'
+  workflow_dispatch:
 
-env:
-  PYTHON_VERSION: '3.11'
-  
 jobs:
   run-script:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          
-      - name: Install system dependencies for yt-dlp
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg curl
+          python-version: '3.11'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade google-generativeai feedparser requests yt-dlp
-          # Install specific versions for stability
-          pip install 'google-generativeai>=0.3.0' 'feedparser>=6.0.0' 'requests>=2.31.0' 'yt-dlp>=2024.4.9'
+          pip install feedparser youtube-transcript-api google-generativeai requests
+          # Verify installations
+          pip list | grep -E "(feedparser|youtube-transcript|google-generativeai|requests)"
 
-      - name: Run the YouTube Monitor Script
+      - name: Run the script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          echo "Starting YouTube Monitor Script..."
-          echo "Python version: $(python --version)"
-          echo "Current directory: $(pwd)"
-          echo "Files in directory:"
-          ls -la
-          
-          # Run the Python script
-          python daily_filter.py 2>&1
-
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: youtube-monitor-logs
-          path: |
-            *.log
-            *.txt
-          retention-days: 7
-
-      - name: Send failure notification
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          MESSAGE="❌ YouTube Monitor FAILED at $(date -u '+%Y-%m-%d %H:%M UTC')"
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="${MESSAGE}" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview=true
+          echo "Testing imports..."
+          python -c "import feedparser; import requests; from youtube_transcript_api import YouTubeTranscriptApi; from google import genai; print('All imports successful!')"
+          echo ""
+          echo "Running main script..."
+          python daily_filter.py
