@@ -119,22 +119,43 @@ def analyze_youtube_link_with_gemini(youtube_url, video_title, keywords, channel
         Respond with ONLY: RELEVANT or NOT_RELEVANT
         """
         
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=20
-            )
-        )
+        # Try different model names
+        model_names = [
+            'gemini-2.0-flash',  # Newest model
+            'gemini-1.5-flash-latest',
+            'gemini-1.5-pro-latest',
+            'gemini-pro'
+        ]
         
-        response_text = response.text.strip().upper()
-        print(f"DEBUG: Gemini response: {response_text}")
+        for model_name in model_names:
+            try:
+                print(f"  Trying model: {model_name}")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        max_output_tokens=20
+                    )
+                )
+                
+                response_text = response.text.strip().upper()
+                print(f"  Gemini response: {response_text}")
+                
+                return "RELEVANT" in response_text
+                
+            except Exception as model_error:
+                if "404" in str(model_error) or "not found" in str(model_error).lower():
+                    continue  # Try next model
+                else:
+                    print(f"  Model {model_name} error: {type(model_error).__name__}")
+                    break
         
-        return "RELEVANT" in response_text
+        print("  All Gemini models failed")
+        return False
 
     except Exception as e:
-        print(f"Gemini analysis failed: {e}")
+        print(f"  Gemini analysis failed: {e}")
         return False
 
 def get_latest_videos(channel_id):
@@ -165,27 +186,27 @@ def main():
     relevant_videos_summary = []
 
     for channel_name, config in CHANNELS_TO_WATCH.items():
-        print(f"LOG: Checking {channel_name}...")
+        print(f"\nLOG: Checking {channel_name}...")
         latest_videos = get_latest_videos(config["id"])
         
         for video in latest_videos:
             try:
-                print(f"  Processing: {video['title'][:60]}...")
+                print(f"\n  Processing: {video['title'][:60]}...")
                 
                 if analyze_youtube_link_with_gemini(video['link'], video['title'], config["keywords"], channel_name):
                     relevant_videos_summary.append(f"* [{video['title']}]({video['link']}) (Channel: {channel_name})")
-                    print(f"  > Matched: {video['title']}")
+                    print(f"  ✅ Matched: {video['title']}")
                 else:
-                    print(f"  > Not relevant: {video['title']}")
+                    print(f"  ❌ Not relevant: {video['title']}")
 
             except Exception as e:
-                print(f"  > Error processing video: {type(e).__name__}")
+                print(f"  ⚠️ Error processing video: {type(e).__name__}")
 
     if relevant_videos_summary:
         message = "🚨 **New Relevant YouTube Videos Found:**\n\n" + "\n".join(relevant_videos_summary)
         send_telegram_message(message)
     else:
-        print("No new relevant videos found in the last 24 hours.")
+        print("\nNo new relevant videos found in the last 24 hours.")
         send_telegram_message("✅ No new relevant videos found in the last 24 hours.")
 
 if __name__ == "__main__":
