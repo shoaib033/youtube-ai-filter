@@ -61,7 +61,7 @@ def send_telegram_message(message_text):
         print(f"✗ Telegram API error: {e}")
 
 def analyze_video_with_retry(youtube_url, video_title, keywords, channel_name, max_retries=3):
-    """Analyze YouTube video link using Gemini with retry logic - STRICTER PROMPT."""
+    """Analyze YouTube video link using Gemini with retry logic - NUMERICAL RESPONSE."""
     if not GEMINI_API_KEY:
         print("  ✗ Gemini API Key not set")
         return False
@@ -69,39 +69,29 @@ def analyze_video_with_retry(youtube_url, video_title, keywords, channel_name, m
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     # Prepare keywords string
-    keywords_str = ", ".join(keywords[:6])  # Take first 6 keywords
+    keywords_str = ", ".join(keywords[:6])
     
-    # STRICTER PROMPT: Be very specific about what to REJECT
+    # PROMPT: Ask for numerical response (1 or 0)
     prompt = f"""
     Acting as a strict IES (Indian Economic Service)/IAS Exam Economics mentor.
     
-    TASK: Analyze if this YouTube video is SPECIFICALLY about ECONOMICS for exam preparation.
+    Analyze if this YouTube video is specifically about ECONOMICS for exam preparation.
     
     VIDEO: {video_title}
     URL: {youtube_url}
     CHANNEL: {channel_name}
     
-    RELEVANT TOPICS (must match closely):
-    {keywords_str}
+    RELEVANT TOPICS: {keywords_str}
     
-    STRICT CRITERIA - Video MUST BE:
-    1. Primarily about Indian economy, economics, or economic policy
-    2. Educational content for IES/UPSC Economics preparation
-    3. Covering specific economic topics from the list above
+    STRICT RULES:
+    1. Only mark as relevant if video is PRIMARILY about Indian economy, economics, or economic policy
+    2. Must be educational content for IES/UPSC Economics preparation
+    3. Must cover specific economic topics from the list above
+    4. REJECT general news, ceremonies, cultural events, shorts, entertainment
     
-    STRICT CRITERIA - MUST REJECT IF:
-    1. General news, politics, or current affairs without economic focus
-    2. Ceremonies, cultural events, or non-economic topics
-    3. Shorts, entertainment, or non-educational content
-    4. Only tangentially related to economics
-    
-    Examples to REJECT:
-    - "Beating Retreat Ceremony" (ceremony, not economics)
-    - "The Nihilist Penguin" (philosophy, not economics)
-    - "Who Owns Patents in Space?" (legal, not economics)
-    - "Brazil's National Fruit" (agriculture/biology, not economics)
-    
-    After strict analysis, respond with ONLY: RELEVANT or NOT_RELEVANT
+    Respond with ONLY a single digit: 
+    1 if RELEVANT
+    0 if NOT_RELEVANT
     """
 
     for attempt in range(max_retries):
@@ -112,16 +102,22 @@ def analyze_video_with_retry(youtube_url, video_title, keywords, channel_name, m
                 model="gemini-2.0-flash", 
                 contents=prompt,
                 generation_config={
-                    "temperature": 0.1,  # Lower temperature for more consistent responses
-                    "max_output_tokens": 20,
+                    "temperature": 0.1,
+                    "max_output_tokens": 5,  # Very short response
                 }
             )
             
-            response_text = response.text.strip().upper()
-            print(f"  Gemini response: {response_text}")
+            response_text = response.text.strip()
+            print(f"  Raw Gemini response: '{response_text}'")
             
-            # Strict check: Only "RELEVANT" (not "VERDICT: RELEVANT")
-            return response_text == "RELEVANT"
+            # Parse numerical response
+            # Look for "1" in the response (could be "1", "1.", "Answer: 1", etc.)
+            if "1" in response_text:
+                print("  ✅ Parsed as: RELEVANT (found '1' in response)")
+                return True
+            else:
+                print("  ❌ Parsed as: NOT RELEVANT (no '1' found)")
+                return False
 
         except Exception as e:
             error_msg = str(e)
@@ -182,7 +178,7 @@ def get_latest_videos(channel_id, max_videos=3):
 def main():
     """Main execution function."""
     print("\n" + "="*60)
-    print("YOUTUBE MONITOR - STRICT GEMINI ANALYSIS")
+    print("YOUTUBE MONITOR - GEMINI NUMERICAL ANALYSIS (1/0)")
     print("="*60)
     
     relevant_videos_summary = []
@@ -201,7 +197,7 @@ def main():
             print(f"\n  📺 {video['title'][:70]}...")
             print(f"  📅 Published: {video['published']}")
             
-            # Analyze with Gemini (STRICTER VERSION)
+            # Analyze with Gemini (NUMERICAL RESPONSE VERSION)
             if analyze_video_with_retry(video['link'], video['title'], config["keywords"], channel_name):
                 # Format: • [Video Title](YouTube Link) - Channel Name
                 relevant_videos_summary.append(f"• [{video['title']}]({video['link']}) - {channel_name}")
