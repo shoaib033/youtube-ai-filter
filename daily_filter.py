@@ -60,8 +60,8 @@ def send_telegram_message(message_text):
     except Exception as e:
         print(f"✗ Telegram API error: {e}")
 
-def analyze_video_with_retry(youtube_url, keywords, channel_name, max_retries=3):
-    """Analyze YouTube video link using Gemini with retry logic."""
+def analyze_video_with_retry(youtube_url, video_title, keywords, channel_name, max_retries=3):
+    """Analyze YouTube video link using Gemini with retry logic - STRICTER PROMPT."""
     if not GEMINI_API_KEY:
         print("  ✗ Gemini API Key not set")
         return False
@@ -69,16 +69,39 @@ def analyze_video_with_retry(youtube_url, keywords, channel_name, max_retries=3)
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     # Prepare keywords string
-    keywords_str = ", ".join(keywords[:8])  # Take first 8 keywords to avoid token limits
+    keywords_str = ", ".join(keywords[:6])  # Take first 6 keywords
     
+    # STRICTER PROMPT: Be very specific about what to REJECT
     prompt = f"""
-    Acting as an IES (Indian Economic Service)/IAS Exam Economics mentor, analyze this video link: {youtube_url}
+    Acting as a strict IES (Indian Economic Service)/IAS Exam Economics mentor.
     
-    Check if this video is relevant for the Indian Economic Service (IES) and IAS Economics syllabus.
+    TASK: Analyze if this YouTube video is SPECIFICALLY about ECONOMICS for exam preparation.
     
-    Focus on these specific topics: {keywords_str}
+    VIDEO: {video_title}
+    URL: {youtube_url}
+    CHANNEL: {channel_name}
     
-    Respond with ONLY: VERDICT: RELEVANT or VERDICT: NOT RELEVANT
+    RELEVANT TOPICS (must match closely):
+    {keywords_str}
+    
+    STRICT CRITERIA - Video MUST BE:
+    1. Primarily about Indian economy, economics, or economic policy
+    2. Educational content for IES/UPSC Economics preparation
+    3. Covering specific economic topics from the list above
+    
+    STRICT CRITERIA - MUST REJECT IF:
+    1. General news, politics, or current affairs without economic focus
+    2. Ceremonies, cultural events, or non-economic topics
+    3. Shorts, entertainment, or non-educational content
+    4. Only tangentially related to economics
+    
+    Examples to REJECT:
+    - "Beating Retreat Ceremony" (ceremony, not economics)
+    - "The Nihilist Penguin" (philosophy, not economics)
+    - "Who Owns Patents in Space?" (legal, not economics)
+    - "Brazil's National Fruit" (agriculture/biology, not economics)
+    
+    After strict analysis, respond with ONLY: RELEVANT or NOT_RELEVANT
     """
 
     for attempt in range(max_retries):
@@ -87,14 +110,18 @@ def analyze_video_with_retry(youtube_url, keywords, channel_name, max_retries=3)
             
             response = client.models.generate_content(
                 model="gemini-2.0-flash", 
-                contents=prompt
+                contents=prompt,
+                generation_config={
+                    "temperature": 0.1,  # Lower temperature for more consistent responses
+                    "max_output_tokens": 20,
+                }
             )
             
             response_text = response.text.strip().upper()
             print(f"  Gemini response: {response_text}")
             
-            # Check for RELEVANT verdict
-            return "VERDICT: RELEVANT" in response_text or "RELEVANT" in response_text
+            # Strict check: Only "RELEVANT" (not "VERDICT: RELEVANT")
+            return response_text == "RELEVANT"
 
         except Exception as e:
             error_msg = str(e)
@@ -155,7 +182,7 @@ def get_latest_videos(channel_id, max_videos=3):
 def main():
     """Main execution function."""
     print("\n" + "="*60)
-    print("YOUTUBE MONITOR - GEMINI LINK ANALYSIS")
+    print("YOUTUBE MONITOR - STRICT GEMINI ANALYSIS")
     print("="*60)
     
     relevant_videos_summary = []
@@ -174,8 +201,8 @@ def main():
             print(f"\n  📺 {video['title'][:70]}...")
             print(f"  📅 Published: {video['published']}")
             
-            # Analyze with Gemini
-            if analyze_video_with_retry(video['link'], config["keywords"], channel_name):
+            # Analyze with Gemini (STRICTER VERSION)
+            if analyze_video_with_retry(video['link'], video['title'], config["keywords"], channel_name):
                 # Format: • [Video Title](YouTube Link) - Channel Name
                 relevant_videos_summary.append(f"• [{video['title']}]({video['link']}) - {channel_name}")
                 print(f"  ✅ RELEVANT - Added to list")
