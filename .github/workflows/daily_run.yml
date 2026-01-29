@@ -2,7 +2,7 @@ name: Daily YouTube AI Filter Run
 
 on:
   schedule:
-    - cron: '30 15 * * *'
+    - cron: '30 15 * * *'  # 9:00 PM IST (15:30 UTC)
   workflow_dispatch:
 
 jobs:
@@ -20,12 +20,36 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install feedparser youtube-transcript-api google-genai requests
+          pip install feedparser google-genai requests
+          
+          # Install youtube-transcript-api
+          pip install youtube-transcript-api
+          
+          # Install yt-dlp (for reliable subtitle extraction)
+          pip install yt-dlp
+          
+          # Verify installations
+          echo "=== Checking installed packages ==="
+          python -c "import feedparser; print('✓ feedparser')"
+          python -c "import google.genai; print('✓ google-genai')"
+          python -c "import requests; print('✓ requests')"
+          
+          # Check yt-dlp
+          yt-dlp --version || echo "✗ yt-dlp not found"
+          
+          # Check youtube-transcript-api
+          python -c "
+          try:
+              from youtube_transcript_api import YouTubeTranscriptApi
+              print('✓ youtube-transcript-api')
+          except ImportError as e:
+              print(f'✗ youtube-transcript-api: {e}')
+          "
 
       - name: Run the script
         env:
-          GEMINI_API_KEY: "AIzaSyAAlzAYaKs9099sjZKdC-1hz0Qe9K_OXQo"  # Replace with actual
-          TELEGRAM_BOT_TOKEN: "8160440202:AAHRUibp3NUAfv8bwC6POVsW85i21r3mL04"  # Replace with actual
-          TELEGRAM_CHAT_ID: "8511286822"  # Replace with actual
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python daily_filter.py
