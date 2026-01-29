@@ -5,6 +5,9 @@ import feedparser
 import time
 import re
 import json
+import subprocess
+import tempfile
+import shutil
 from google import genai
 from google.genai import types
 
@@ -76,7 +79,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 print("=" * 80)
-print("CORRECTED: MAIN APPROACH + FALLBACKS")
+print("FINAL FIXED VERSION WITH ALL METHODS")
 print("=" * 80)
 
 def send_telegram_message(message_text):
@@ -107,10 +110,95 @@ def send_telegram_message(message_text):
         print(f"✗ Telegram API error: {e}")
         return False
 
-# --- MAIN APPROACH: Get transcript and analyze with keywords ---
+# --- METHOD 1: yt-dlp (Most reliable) ---
+def get_transcript_ytdlp(video_id, video_title):
+    """Get transcript using yt-dlp."""
+    print(f"\n🎬 METHOD 1 (yt-dlp): {video_title[:50]}...")
+    
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        # Check if yt-dlp is installed
+        result = subprocess.run(['which', 'yt-dlp'], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("   ✗ yt-dlp not installed")
+            return None
+        
+        # Try with deno (JavaScript runtime)
+        cmd = [
+            'yt-dlp',
+            '--skip-download',
+            '--write-auto-sub',
+            '--convert-subs', 'srt',
+            '--sub-lang', 'en,en-US,en-GB',
+            '--output', f'{temp_dir}/%(id)s',
+            f'https://www.youtube.com/watch?v={video_id}'
+        ]
+        
+        print(f"   Running yt-dlp...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode == 0:
+            # Look for subtitle files
+            import glob
+            sub_files = glob.glob(f'{temp_dir}/{video_id}*.srt') + glob.glob(f'{temp_dir}/{video_id}*.vtt')
+            
+            if sub_files:
+                with open(sub_files[0], 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Parse SRT/VTT
+                transcript = parse_subtitle_content(content)
+                if transcript and len(transcript) > 100:
+                    print(f"   ✓ Got transcript via yt-dlp ({len(transcript)} chars)")
+                    return transcript
+            else:
+                print(f"   ✗ No subtitle files generated")
+        else:
+            print(f"   ✗ yt-dlp failed: {result.stderr[:200]}")
+            
+    except subprocess.TimeoutExpired:
+        print(f"   ✗ yt-dlp timeout")
+    except Exception as e:
+        print(f"   ✗ yt-dlp error: {type(e).__name__}")
+    finally:
+        try:
+            shutil.rmtree(temp_dir)
+        except:
+            pass
+    
+    return None
+
+def parse_subtitle_content(content):
+    """Parse SRT/VTT subtitle content."""
+    lines = content.split('\n')
+    text_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        # Skip timestamp lines, empty lines, and numbering
+        if not line or '-->' in line or line.isdigit() or line.startswith('WEBVTT'):
+            continue
+        # Remove HTML tags
+        line = re.sub(r'<[^>]+>', '', line)
+        if line:
+            text_lines.append(line)
+    
+    return ' '.join(text_lines)
+
+# --- METHOD 2: YouTube Data API ---
+def get_transcript_youtube_api(video_id, video_title):
+    """Get transcript using YouTube Data API."""
+    print(f"   METHOD 2 (YouTube API): Trying...")
+    
+    # You would need a YouTube Data API key for this
+    # This is a placeholder for future implementation
+    return None
+
+# --- METHOD 3: Web Scraping ---
 def get_transcript_web_scraping(video_id, video_title):
-    """Get transcript by scraping YouTube page."""
-    print(f"\n🎬 Getting transcript for: {video_title[:60]}...")
+    """Get transcript via web scraping."""
+    print(f"   METHOD 3 (Web scraping): Trying...")
     
     try:
         headers = {
@@ -125,226 +213,190 @@ def get_transcript_web_scraping(video_id, video_title):
         )
         
         if response.status_code != 200:
-            print(f"   ✗ Failed to fetch page: {response.status_code}")
             return None
         
         html = response.text
         
-        # Method 1: Look for captionTracks
-        import re
+        # Try multiple patterns
+        patterns = [
+            r'"captionTracks":\s*(\[.*?\]),',
+            r'captionTracks\":\s*(\[.*?\])',
+            r'"captions":.*?"captionTracks":\s*(\[.*?\])',
+        ]
         
-        # Pattern for captionTracks in JSON
-        pattern = r'"captionTracks":\s*(\[.*?\]),'
-        match = re.search(pattern, html, re.DOTALL)
-        
-        if match:
-            try:
-                caption_tracks = json.loads(match.group(1))
-                
-                # Find English captions
-                for track in caption_tracks:
-                    lang = track.get('languageCode', '')
-                    if lang.startswith('en'):
-                        caption_url = track.get('baseUrl')
-                        if caption_url:
-                            print(f"   Found English captions, fetching...")
-                            
-                            # Add query parameters for better format
-                            if 'fmt=json3' not in caption_url and 'fmt=srv3' not in caption_url:
-                                caption_url += '&fmt=json3'
-                            
-                            caption_response = requests.get(caption_url, timeout=30)
-                            if caption_response.status_code == 200:
-                                # Parse JSON captions
-                                try:
-                                    caption_data = json.loads(caption_response.text)
-                                    # Extract text from events
-                                    transcript_parts = []
-                                    for event in caption_data.get('events', []):
-                                        if 'segs' in event:
-                                            for seg in event['segs']:
-                                                if 'utf8' in seg:
-                                                    transcript_parts.append(seg['utf8'])
-                                    
-                                    transcript = ' '.join(transcript_parts)
-                                    if len(transcript) > 100:
-                                        print(f"   ✓ Got transcript ({len(transcript)} chars)")
-                                        return transcript
-                                except json.JSONDecodeError:
-                                    # Try XML parsing
+        for pattern in patterns:
+            match = re.search(pattern, html, re.DOTALL)
+            if match:
+                try:
+                    caption_tracks = json.loads(match.group(1))
+                    
+                    # Find English captions
+                    for track in caption_tracks:
+                        lang = track.get('languageCode', '')
+                        if lang.startswith('en'):
+                            base_url = track.get('baseUrl')
+                            if base_url:
+                                # Fetch captions
+                                caption_response = requests.get(base_url, timeout=30)
+                                if caption_response.status_code == 200:
+                                    # Try to parse as XML
                                     text_pattern = r'<text[^>]*>([^<]+)</text>'
                                     text_matches = re.findall(text_pattern, caption_response.text)
                                     if text_matches:
                                         transcript = ' '.join(text_matches)
                                         if len(transcript) > 100:
-                                            print(f"   ✓ Got transcript via XML ({len(transcript)} chars)")
+                                            print(f"   ✓ Got transcript via web scraping ({len(transcript)} chars)")
                                             return transcript
-            except Exception as e:
-                print(f"   ✗ Error parsing captions: {type(e).__name__}")
+                except:
+                    continue
         
-        # Method 2: Try to get description
-        desc_pattern = r'"description":{"simpleText":"(.*?)"}'
-        desc_match = re.search(desc_pattern, html)
+        # Try to get description
+        desc_patterns = [
+            r'"description":"(.*?)"',
+            r'"description":{"simpleText":"(.*?)"}',
+            r'shortDescription":"(.*?)"',
+        ]
         
-        if desc_match:
-            description = desc_match.group(1)
+        for pattern in desc_patterns:
+            matches = re.findall(pattern, html)
+            for match in matches:
+                if len(match) > 200:
+                    try:
+                        import json
+                        description = json.loads(f'"{match}"')
+                        if len(description) > 200:
+                            print(f"   ✓ Got description ({len(description)} chars)")
+                            return f"DESCRIPTION: {description}"
+                    except:
+                        if len(match) > 200:
+                            print(f"   ✓ Got description raw ({len(match)} chars)")
+                            return f"DESCRIPTION: {match}"
+        
+    except Exception as e:
+        print(f"   ✗ Web scraping error: {type(e).__name__}")
+    
+    return None
+
+# --- MAIN: Get transcript using all methods ---
+def get_transcript(video_id, video_title):
+    """Get transcript using multiple methods."""
+    print(f"\n🔍 Getting transcript for: {video_title[:60]}...")
+    
+    # Try yt-dlp first (most reliable)
+    transcript = get_transcript_ytdlp(video_id, video_title)
+    
+    # Try web scraping if yt-dlp failed
+    if not transcript:
+        transcript = get_transcript_web_scraping(video_id, video_title)
+    
+    return transcript
+
+# --- GEMINI ANALYSIS FUNCTIONS ---
+def analyze_with_gemini(content_type, content, context, video_title, channel_name):
+    """Analyze content with Gemini using correct model."""
+    if not GEMINI_API_KEY:
+        print("ERROR: Gemini API Key missing.")
+        return False
+
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        
+        if content_type == "transcript":
+            # MAIN ANALYSIS: Transcript vs channel keywords
+            keywords = context["keywords"]
+            keyword_list = ", ".join(keywords)
+            
+            # Limit content length
+            content_short = content[:3000] if len(content) > 3000 else content
+            
+            prompt = f"""
+            VIDEO TITLE: {video_title}
+            CHANNEL: {channel_name}
+            
+            CONTENT:
+            {content_short}
+            
+            QUESTION: Is this video about ANY of these specific topics?
+            TOPICS: {keyword_list}
+            
+            IMPORTANT: Answer YES if it discusses ANY of these topics (even just one).
+            
+            Respond with ONLY: YES or NO
+            """
+            
+            print(f"   🤖 MAIN ANALYSIS: Checking against {len(keywords)} channel keywords")
+            
+        else:  # title analysis
+            # FALLBACK: Title analysis for IES/UPSC
+            prompt = f"""
+            CONTEXT: Preparing for Indian Economic Service (IES) and UPSC Economics.
+            
+            VIDEO TITLE: "{video_title}"
+            CHANNEL: {channel_name}
+            
+            QUESTION: Based ONLY on title, is this relevant for IES/UPSC Economics prep?
+            
+            CONSIDER: Indian economy, budget, trade, government schemes, RBI, fiscal/monetary policy.
+            
+            Respond with ONLY: YES or NO
+            """
+            
+            print(f"   🤖 FALLBACK: Title analysis for IES/UPSC")
+        
+        # Use correct model - gemini-1.5-flash may not be available, try alternatives
+        models_to_try = ['gemini-1.5-pro', 'gemini-pro', 'models/gemini-pro']
+        
+        for model_name in models_to_try:
             try:
-                import json
-                description = json.loads(f'"{description}"')
-                if len(description) > 200:
-                    print(f"   ✓ Got description ({len(description)} chars)")
-                    # Use description as fallback content
-                    return f"DESCRIPTION: {description}"
-            except:
-                pass
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        max_output_tokens=10
+                    )
+                )
+                
+                response_text = response.text.strip().upper()
+                print(f"   Gemini response ({model_name}): {response_text}")
+                
+                return response_text == "YES"
+                
+            except Exception as model_error:
+                if "404" in str(model_error) or "not found" in str(model_error).lower():
+                    continue  # Try next model
+                else:
+                    print(f"   ✗ Model {model_name} error: {type(model_error).__name__}")
+                    break
         
-        print(f"   ✗ No transcript/description found")
-        return None
+        print(f"   ✗ All Gemini models failed")
+        return False
         
     except Exception as e:
-        print(f"   ✗ Error: {type(e).__name__}: {str(e)[:100]}")
-        return None
-
-# --- MAIN ANALYSIS: Gemini checks transcript against channel keywords ---
-def analyze_transcript_with_keywords(transcript, keywords, video_title, channel_name):
-    """MAIN APPROACH: Check if transcript is relevant to channel keywords."""
-    if not GEMINI_API_KEY:
-        print("ERROR: Gemini API Key missing.")
+        print(f"   🚨 Gemini analysis failed: {type(e).__name__}: {str(e)[:100]}")
         return False
 
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        keyword_list = ", ".join(keywords)
-        
-        # Limit transcript length
-        transcript_short = transcript[:4000] if len(transcript) > 4000 else transcript
-        
-        prompt = f"""
-        VIDEO TITLE: {video_title}
-        CHANNEL: {channel_name}
-        
-        CONTENT (transcript/description):
-        {transcript_short}
-        
-        QUESTION: Is the MAIN CONTENT of this video related to ANY of these specific topics?
-        
-        TOPICS TO CHECK: {keyword_list}
-        
-        IMPORTANT: 
-        1. Check if the video discusses ANY of these topics (even just one)
-        2. "India-EU deal" matches "trade agreement", "FTA", "international trade"
-        3. "De-dollarisation" matches "Indian economy", "economics", "international trade"
-        4. "Budget 2026" matches "budget", "Indian economy", "tax"
-        5. Be liberal - if it's related even indirectly, say YES
-        
-        Respond with ONLY JSON: {{"relevant": true}} or {{"relevant": false}}
-        """
-        
-        print(f"\n🤖 MAIN ANALYSIS: Checking against {len(keywords)} channel keywords...")
-        
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=50
-            )
-        )
-        
-        response_text = response.text.strip()
-        print(f"   Gemini response: {response_text}")
-        
-        # Parse JSON response
-        try:
-            result = json.loads(response_text)
-            if result.get("relevant", False):
-                print("   ✅ RELEVANT: Matches channel keywords")
-                return True
-            else:
-                print("   ❌ NOT RELEVANT: Doesn't match channel keywords")
-                return False
-        except json.JSONDecodeError:
-            # Fallback parsing
-            if '"relevant": true' in response_text or "'relevant': true" in response_text:
-                print("   ✅ RELEVANT (fallback parsing)")
-                return True
-            else:
-                print("   ❌ NOT RELEVANT (fallback parsing)")
-                return False
-        
-    except Exception as e:
-        print(f"   🚨 Gemini analysis failed: {e}")
-        return False
-
-# --- FALLBACK 1: Title analysis for IES/UPSC context ---
-def analyze_title_for_exam(video_title, channel_name):
-    """FALLBACK 1: Check if title suggests relevance for IES/UPSC preparation."""
-    if not GEMINI_API_KEY:
-        print("ERROR: Gemini API Key missing.")
-        return False
-
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        prompt = f"""
-        CONTEXT: I am preparing for Indian Economic Service (IES) and UPSC Economics.
-        
-        VIDEO TITLE: "{video_title}"
-        CHANNEL: {channel_name}
-        
-        QUESTION: Based ONLY on the title, is this video likely relevant for IES/UPSC Economics preparation?
-        
-        CONSIDER RELEVANCE TO:
-        - Indian economy, budget, economic survey
-        - Government schemes, policies, taxation
-        - International trade, agreements
-        - RBI, monetary policy, finance
-        - Economic concepts with Indian context
-        
-        IMPORTANT: Be liberal - if title SUGGESTS it MIGHT be relevant, say YES.
-        
-        Respond with ONLY: YES or NO
-        """
-        
-        print(f"   🤖 FALLBACK 1: Analyzing title for exam relevance...")
-        
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=10
-            )
-        )
-        
-        response_text = response.text.strip().upper()
-        print(f"   Title analysis result: {response_text}")
-        
-        return response_text == "YES"
-        
-    except Exception as e:
-        print(f"   🚨 Title analysis failed: {e}")
-        return False
-
-# --- FALLBACK 2: Simple keyword matching ---
+# --- SIMPLE KEYWORD MATCHING (Final fallback) ---
 def check_simple_keyword_match(video_title, keywords):
-    """FALLBACK 2: Simple keyword matching in title."""
+    """Simple keyword matching as last resort."""
     title_lower = video_title.lower()
     
+    # Check channel keywords
     for keyword in keywords:
         if keyword.lower() in title_lower:
             return True
     
-    # Common variations
-    variations = [
+    # Common economic terms
+    economic_terms = [
         'budget', 'economic survey', 'gdp', 'inflation', 'tax',
         'trade', 'fta', 'india-eu', 'india eu', 'rbi',
         'finance minister', 'union budget', 'fiscal', 'monetary',
         'economy', 'economic', 'commerce', 'industry',
-        'de-dollar', 'dollar', 'currency', 'imf'
+        'de-dollar', 'dollar', 'currency', 'imf', 'export', 'import',
+        'banking', 'finance', 'scheme', 'policy', 'government'
     ]
     
-    for term in variations:
+    for term in economic_terms:
         if term in title_lower:
             return True
     
@@ -388,23 +440,36 @@ def get_latest_videos(channel_id):
     return []
 
 def main():
-    """Main execution function with CORRECT priority order."""
+    """Main execution function."""
     print("\n" + "=" * 80)
-    print("STARTING WITH CORRECT PRIORITY ORDER")
+    print("STARTING WITH ALL METHODS")
     print("=" * 80)
+    
+    # Check yt-dlp installation
+    print("Checking dependencies...")
+    try:
+        subprocess.run(['yt-dlp', '--version'], capture_output=True, check=True)
+        print("✓ yt-dlp is installed")
+    except:
+        print("✗ yt-dlp not found. Installing via pip...")
+        try:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', 'yt-dlp'], check=True)
+            print("✓ yt-dlp installed via pip")
+        except:
+            print("✗ Failed to install yt-dlp")
     
     if not GEMINI_API_KEY:
         print("ERROR: GEMINI_API_KEY not set!")
         return
     
     print(f"✓ Gemini API key is set")
-    send_telegram_message("🔍 YouTube Monitor Started - Main + Fallback Approach")
+    send_telegram_message("🔍 YouTube Monitor Started - All Methods Active")
     
     relevant_videos = []
+    analysis_methods = {"Main": 0, "Title": 0, "Keyword": 0}
     
     for channel_name, config in CHANNELS_TO_WATCH.items():
         print(f"\n🔍 Checking: {channel_name}")
-        print(f"   Keywords: {len(config['keywords'])} topics")
         
         videos = get_latest_videos(config["id"])
         
@@ -419,75 +484,62 @@ def main():
             print(f"📺 [{i+1}/{len(videos)}] {video['title']}")
             print(f"   Published: {video['published']}")
             
-            # --- STEP 1: MAIN APPROACH ---
-            # Try to get transcript/description
-            content = get_transcript_web_scraping(video['id'], video['title'])
+            # --- STEP 1: MAIN APPROACH (Transcript analysis) ---
+            transcript = get_transcript(video['id'], video['title'])
             
-            if content and len(content) > 200:
+            if transcript and len(transcript) > 100:
                 print(f"   ✓ Got content for main analysis")
                 
-                # MAIN ANALYSIS: Check against channel keywords
-                is_relevant = analyze_transcript_with_keywords(
-                    content, 
-                    config["keywords"], 
+                # MAIN: Analyze transcript against channel keywords
+                is_relevant = analyze_with_gemini(
+                    "transcript", 
+                    transcript,
+                    config,  # channel config with keywords
                     video['title'],
                     channel_name
                 )
                 
                 if is_relevant:
                     relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name}")
-                    print(f"   ✅ ADDED (Main analysis - matches keywords)")
-                    continue  # Skip fallbacks since main analysis succeeded
-                else:
-                    print(f"   ❌ Main analysis: Not relevant to keywords")
-                    # Continue to fallbacks since main analysis said no
+                    analysis_methods["Main"] += 1
+                    print(f"   ✅ ADDED (Main analysis)")
+                    continue
             
-            else:
-                print(f"   ⚠️ No content for main analysis")
-            
-            # --- STEP 2: FALLBACK 1 ---
-            # Title analysis for exam context
-            print(f"   ⚠️ Trying Fallback 1: Title analysis for IES/UPSC...")
-            title_relevant = analyze_title_for_exam(video['title'], channel_name)
+            # --- STEP 2: FALLBACK 1 (Title analysis with Gemini) ---
+            print(f"   ⚠️ No transcript, trying title analysis...")
+            title_relevant = analyze_with_gemini(
+                "title",
+                video['title'],
+                config,
+                video['title'],
+                channel_name
+            )
             
             if title_relevant:
-                relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name} [Title analysis]")
-                print(f"   ✅ ADDED (Fallback 1 - title suggests exam relevance)")
-                continue  # Skip further fallbacks
+                relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name} [Title]")
+                analysis_methods["Title"] += 1
+                print(f"   ✅ ADDED (Title analysis)")
+                continue
             
-            # --- STEP 3: FALLBACK 2 ---
-            # Simple keyword matching
-            print(f"   ⚠️ Trying Fallback 2: Simple keyword match...")
+            # --- STEP 3: FALLBACK 2 (Simple keyword matching) ---
+            print(f"   ⚠️ Gemini failed, trying keyword match...")
             keyword_match = check_simple_keyword_match(video['title'], config["keywords"])
             
             if keyword_match:
-                relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name} [Keyword match]")
-                print(f"   ✅ ADDED (Fallback 2 - keyword match)")
+                relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name} [Keyword]")
+                analysis_methods["Keyword"] += 1
+                print(f"   ✅ ADDED (Keyword match)")
             else:
-                print(f"   ❌ All checks failed - Not relevant")
+                print(f"   ❌ All checks failed")
     
     print(f"\n{'='*80}")
-    print("SUMMARY")
+    print("DAILY SUMMARY")
     print(f"{'='*80}")
     print(f"Total relevant videos found: {len(relevant_videos)}")
+    print(f"Analysis methods: Main={analysis_methods['Main']}, Title={analysis_methods['Title']}, Keyword={analysis_methods['Keyword']}")
     
     # Send results
     if relevant_videos:
-        # Add analysis method tags
-        methods_summary = {
-            "Main": 0,
-            "Title": 0,
-            "Keyword": 0
-        }
-        
-        for video in relevant_videos:
-            if "[Title analysis]" in video:
-                methods_summary["Title"] += 1
-            elif "[Keyword match]" in video:
-                methods_summary["Keyword"] += 1
-            else:
-                methods_summary["Main"] += 1
-        
         if len(relevant_videos) > 10:
             message = f"🚨 **{len(relevant_videos)} Relevant Videos Found:**\n\n"
             message += "\n".join(relevant_videos[:10])
@@ -496,16 +548,31 @@ def main():
             message = f"🚨 **{len(relevant_videos)} Relevant Videos Found:**\n\n"
             message += "\n".join(relevant_videos)
         
-        # Add summary
-        message += f"\n\n📊 *Analysis Methods:*"
-        message += f"\n• Main (transcript analysis): {methods_summary['Main']}"
-        message += f"\n• Title analysis: {methods_summary['Title']}"
-        message += f"\n• Keyword match: {methods_summary['Keyword']}"
+        message += f"\n\n📊 *Analysis Summary:*"
+        message += f"\n• Transcript analysis: {analysis_methods['Main']}"
+        message += f"\n• Title analysis: {analysis_methods['Title']}"
+        message += f"\n• Keyword match: {analysis_methods['Keyword']}"
+        message += f"\n🕒 *Time:* {time.strftime('%Y-%m-%d %H:%M IST')}"
         
         send_telegram_message(message)
         print(f"\n✅ Sent notification with {len(relevant_videos)} videos")
     else:
-        message = "✅ **Daily Check:** No relevant videos found in the last 24 hours."
+        message = f"""
+✅ **Daily YouTube Check Complete**
+
+*Status:* No relevant videos found for IES/UPSC Economics preparation.
+
+*Channels checked ({len(CHANNELS_TO_WATCH)}):*
+- Mint (Economics & Trade)
+- Mrunal Unacedmy (Government Schemes)
+- OnlyIAS Ext. (Monthly Schemes)
+- Vajiram Ravi (Economics)
+- DrishtiIAS Hindi/English (Economics)
+- Sleepy Classes (Economics)
+- CareerWill (Economics)
+
+*Time:* {time.strftime('%Y-%m-%d %H:%M IST')}
+        """
         send_telegram_message(message)
         print(f"\n✅ Sent 'no videos' notification")
 
