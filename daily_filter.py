@@ -3,40 +3,15 @@ import requests
 import feedparser
 import time
 from google import genai
-from google.genai import types
 
-# --- Configuration Section ---
+# --- Configuration Section (ONLY 2 CHANNELS FOR TESTING) ---
 CHANNELS_TO_WATCH = {
     "Mint": {
         "id": "UCUI9vm69ZbAqRK3q3vKLWCQ",
         "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi"]
     },
-    "Mrunal Unacedmy": {
-        "id": "UCwDfgcUkKKTxPozU9UnQ8Pw",
-        "keywords": ["Indian government schemes", "government policy", "monthly economy"]
-    },
-    "OnlyIAS Ext.": {
-        "id": "UCAidhU356a0ej2MtFEylvBA",
-        "keywords": ["Monthly government schemes", "Important government scheme in news"]
-    },
-    "Vajiram Ravi": {
-        "id": "UCzelA5kqD9v6k6drK44l4_g",
-        "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi"]
-    },
-    "DrishtiIAS Hindi": {
-        "id": "UCzLqOSZPtUKrmSEnlH4LAvw",
-        "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi"]
-    },
     "DrishtiIAS English": {
         "id": "UCafpueX9hFLls24ed6UddEQ",
-        "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi", "economics concept explainer"]
-    },
-    "Sleepy Classes": {
-        "id": "UCgRf62bnK3uX4N-YEhG4Jog",
-        "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi", "economics concept explainer"]
-    },
-    "CareerWill": {
-        "id": "UCmS9VpdkUNhyOKtKQrtFV1Q",
         "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi", "economics concept explainer"]
     }
 }
@@ -48,18 +23,17 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # --- DEBUGGING LINES ---
 if GEMINI_API_KEY:
-    print("DEBUG: Gemini API Key found.")
+    print("✓ Gemini API Key found.")
 else:
-    print("DEBUG: Gemini API Key MISSING.")
+    print("✗ Gemini API Key MISSING.")
 if TELEGRAM_BOT_TOKEN:
-    print(f"DEBUG: Telegram Token found (Length: {len(TELEGRAM_BOT_TOKEN)}).")
-    print(f"DEBUG: Token preview: {TELEGRAM_BOT_TOKEN[:20]}...")
+    print(f"✓ Telegram Token found.")
 else:
-    print("DEBUG: Telegram Token MISSING.")
+    print("✗ Telegram Token MISSING.")
 if TELEGRAM_CHAT_ID:
-    print("DEBUG: Telegram Chat ID found.")
+    print("✓ Telegram Chat ID found.")
 else:
-    print("DEBUG: Telegram Chat ID MISSING.")
+    print("✗ Telegram Chat ID MISSING.")
 
 def send_telegram_message(message_text):
     """Sends a notification message via Telegram bot."""
@@ -68,8 +42,6 @@ def send_telegram_message(message_text):
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    print(f"DEBUG: Telegram URL being used: https://api.telegram.org/bot[...hidden...]/sendMessage")
     
     payload = {
         'chat_id': TELEGRAM_CHAT_ID,
@@ -80,134 +52,157 @@ def send_telegram_message(message_text):
     
     try:
         response = requests.post(url, data=payload, timeout=30)
-        print(f"DEBUG: Telegram response status: {response.status_code}")
         
         if response.status_code == 200:
-            print("Telegram message sent successfully.")
+            print("✓ Telegram message sent successfully.")
         else:
-            print(f"Failed to send Telegram message: {response.text[:200]}")
+            print(f"✗ Failed to send Telegram message: {response.text[:200]}")
     except Exception as e:
-        print(f"Telegram API error: {e}")
+        print(f"✗ Telegram API error: {e}")
 
-def analyze_youtube_link_with_gemini(youtube_url, video_title, keywords, channel_name):
-    """Uses Gemini to analyze YouTube video directly from URL."""
+def analyze_video_with_retry(youtube_url, keywords, channel_name, max_retries=3):
+    """Analyze YouTube video link using Gemini with retry logic."""
     if not GEMINI_API_KEY:
-        print("GEMINI_API_KEY not set, skipping analysis")
+        print("  ✗ Gemini API Key not set")
         return False
 
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        keyword_list = ", ".join(keywords)
-        
-        prompt = f"""
-        Analyze this YouTube video for relevance to Indian Economic Service (IES) and UPSC Economics preparation.
-        
-        VIDEO TITLE: "{video_title}"
-        CHANNEL: {channel_name}
-        YOUTUBE URL: {youtube_url}
-        
-        Check if this video discusses ANY of these topics:
-        {keyword_list}
-        
-        IMPORTANT: Consider the video's title, description, content, and context. 
-        This is for exam preparation, so focus on educational content about:
-        - Indian economy and economics
-        - Government schemes and policies
-        - Budget, trade, RBI, fiscal/monetary policy
-        - Economic concepts and explanations
-        
-        Respond with ONLY: RELEVANT or NOT_RELEVANT
-        """
-        
-        # Try different model names
-        model_names = [
-            'gemini-2.0-flash',  # Newest model
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-pro-latest',
-            'gemini-pro'
-        ]
-        
-        for model_name in model_names:
-            try:
-                print(f"  Trying model: {model_name}")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=[prompt],
-                    config=types.GenerateContentConfig(
-                        temperature=0.1,
-                        max_output_tokens=20
-                    )
-                )
-                
-                response_text = response.text.strip().upper()
-                print(f"  Gemini response: {response_text}")
-                
-                return "RELEVANT" in response_text
-                
-            except Exception as model_error:
-                if "404" in str(model_error) or "not found" in str(model_error).lower():
-                    continue  # Try next model
-                else:
-                    print(f"  Model {model_name} error: {type(model_error).__name__}")
-                    break
-        
-        print("  All Gemini models failed")
-        return False
-
-    except Exception as e:
-        print(f"  Gemini analysis failed: {e}")
-        return False
-
-def get_latest_videos(channel_id):
-    """Fetches latest videos from RSS feed."""
-    feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    feed = feedparser.parse(feed_url)
-    videos = []
+    client = genai.Client(api_key=GEMINI_API_KEY)
     
-    for entry in feed.entries[:5]:  # Check latest 5 videos
+    # Prepare keywords string
+    keywords_str = ", ".join(keywords[:8])  # Take first 8 keywords to avoid token limits
+    
+    prompt = f"""
+    Acting as an IES (Indian Economic Service)/IAS Exam Economics mentor, analyze this video link: {youtube_url}
+    
+    Check if this video is relevant for the Indian Economic Service (IES) and IAS Economics syllabus.
+    
+    Focus on these specific topics: {keywords_str}
+    
+    Respond with ONLY: VERDICT: RELEVANT or VERDICT: NOT RELEVANT
+    """
+
+    for attempt in range(max_retries):
         try:
-            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                published_timestamp = time.mktime(entry.published_parsed)
-                # Check if from last 24 hours
-                if time.time() - published_timestamp < 86400:
-                    videos.append({
-                        'title': entry.title,
-                        'link': entry.link,
-                        'id': entry.link.split('v=')[1].split('&')[0] if 'v=' in entry.link else None
-                    })
-        except Exception as e:
-            print(f"Error parsing video: {e}")
-            continue
+            print(f"  🤖 Attempt {attempt + 1}: Analyzing with Gemini...")
             
-    return videos
+            response = client.models.generate_content(
+                model="gemini-2.0-flash", 
+                contents=prompt
+            )
+            
+            response_text = response.text.strip().upper()
+            print(f"  Gemini response: {response_text}")
+            
+            # Check for RELEVANT verdict
+            return "VERDICT: RELEVANT" in response_text or "RELEVANT" in response_text
+
+        except Exception as e:
+            error_msg = str(e)
+            
+            # Check for Rate Limit (429) or Quota errors
+            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                if attempt < max_retries - 1:
+                    print(f"  ⚠️ Rate limit hit. Waiting 65 seconds...")
+                    time.sleep(65)
+                else:
+                    print(f"  ✗ Still hitting rate limits after 3 attempts.")
+                    return False
+            
+            # Check for model errors
+            elif "404" in error_msg or "NOT_FOUND" in error_msg:
+                print(f"  ✗ Model error: {error_msg[:100]}")
+                return False
+            
+            else:
+                print(f"  ✗ Gemini error: {error_msg[:100]}")
+                return False
+    
+    return False
+
+def get_latest_videos(channel_id, max_videos=3):
+    """Fetch latest videos from RSS feed (limited to 3 for testing)."""
+    feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(feed_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            feed = feedparser.parse(response.text)
+            videos = []
+            
+            for entry in feed.entries[:max_videos]:  # Limit to 3 videos for testing
+                try:
+                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                        published_timestamp = time.mktime(entry.published_parsed)
+                        # Check if from last 24 hours
+                        if time.time() - published_timestamp < 86400:
+                            videos.append({
+                                'title': entry.title,
+                                'link': entry.link,
+                                'published': time.strftime('%Y-%m-%d %H:%M', entry.published_parsed)
+                            })
+                except Exception:
+                    continue
+                    
+            return videos
+            
+    except Exception as e:
+        print(f"  ✗ Error fetching videos: {e}")
+    
+    return []
 
 def main():
     """Main execution function."""
+    print("\n" + "="*60)
+    print("YOUTUBE MONITOR - GEMINI LINK ANALYSIS")
+    print("="*60)
+    
     relevant_videos_summary = []
-
+    
     for channel_name, config in CHANNELS_TO_WATCH.items():
-        print(f"\nLOG: Checking {channel_name}...")
-        latest_videos = get_latest_videos(config["id"])
+        print(f"\n🔍 Checking: {channel_name}")
+        latest_videos = get_latest_videos(config["id"], max_videos=3)
+        
+        if not latest_videos:
+            print(f"  No recent videos found")
+            continue
+            
+        print(f"  Found {len(latest_videos)} recent videos")
         
         for video in latest_videos:
-            try:
-                print(f"\n  Processing: {video['title'][:60]}...")
-                
-                if analyze_youtube_link_with_gemini(video['link'], video['title'], config["keywords"], channel_name):
-                    relevant_videos_summary.append(f"* [{video['title']}]({video['link']}) (Channel: {channel_name})")
-                    print(f"  ✅ Matched: {video['title']}")
-                else:
-                    print(f"  ❌ Not relevant: {video['title']}")
+            print(f"\n  📺 {video['title'][:70]}...")
+            print(f"  📅 Published: {video['published']}")
+            
+            # Analyze with Gemini
+            if analyze_video_with_retry(video['link'], config["keywords"], channel_name):
+                # Format: • [Video Title](YouTube Link) - Channel Name
+                relevant_videos_summary.append(f"• [{video['title']}]({video['link']}) - {channel_name}")
+                print(f"  ✅ RELEVANT - Added to list")
+            else:
+                print(f"  ❌ NOT RELEVANT")
 
-            except Exception as e:
-                print(f"  ⚠️ Error processing video: {type(e).__name__}")
-
+    print(f"\n{'='*60}")
+    print("DAILY SUMMARY")
+    print(f"{'='*60}")
+    
     if relevant_videos_summary:
-        message = "🚨 **New Relevant YouTube Videos Found:**\n\n" + "\n".join(relevant_videos_summary)
+        message = "🚨 **Relevant YouTube Videos Found:**\n\n" + "\n".join(relevant_videos_summary)
+        message += f"\n\n🕒 *Checked at:* {time.strftime('%Y-%m-%d %H:%M IST')}"
         send_telegram_message(message)
+        print(f"✅ Sent notification with {len(relevant_videos_summary)} videos")
     else:
-        print("\nNo new relevant videos found in the last 24 hours.")
-        send_telegram_message("✅ No new relevant videos found in the last 24 hours.")
+        message = f"""
+✅ **Daily YouTube Check Complete**
+
+*Status:* No relevant videos found in the last 24 hours.
+
+*Channels checked:* {', '.join(CHANNELS_TO_WATCH.keys())}
+
+*Time:* {time.strftime('%Y-%m-%d %H:%M IST')}
+        """
+        send_telegram_message(message)
+        print("✅ Sent 'no videos' notification")
 
 if __name__ == "__main__":
     main()
