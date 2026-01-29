@@ -2,60 +2,71 @@ name: Daily YouTube AI Filter Run
 
 on:
   schedule:
-    - cron: '30 15 * * *'  # 9:00 PM IST (15:30 UTC)
-  workflow_dispatch:
+    - cron: '30 15 * * *'  # Runs daily at 9:00 PM IST (15:30 UTC)
+  workflow_dispatch:  # Allows manual triggering
 
+env:
+  PYTHON_VERSION: '3.11'
+  
 jobs:
   run-script:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Install system dependencies
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install system dependencies for yt-dlp
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip python3-dev curl
-          # Install deno for yt-dlp JavaScript runtime
-          curl -fsSL https://deno.land/install.sh | sh
-          export DENO_INSTALL="/home/runner/.deno"
-          export PATH="$DENO_INSTALL/bin:$PATH"
-          echo "DENO_INSTALL=$DENO_INSTALL" >> $GITHUB_ENV
-          echo "$DENO_INSTALL/bin" >> $GITHUB_PATH
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install feedparser youtube-transcript-api google-generativeai requests
-          # Also install these for better transcript handling
-          pip install yt-dlp
+          sudo apt-get install -y ffmpeg curl
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install feedparser google-genai requests
-          pip install yt-dlp
-          
-          # Verify installations
-          echo "=== Checking installations ==="
-          python -c "import feedparser; print('✓ feedparser')"
-          python -c "import google.genai; print('✓ google-genai')"
-          python -c "import requests; print('✓ requests')"
-          yt-dlp --version && echo "✓ yt-dlp"
-          deno --version && echo "✓ deno"
+          pip install --upgrade google-generativeai feedparser requests yt-dlp
+          # Install specific versions for stability
+          pip install 'google-generativeai>=0.3.0' 'feedparser>=6.0.0' 'requests>=2.31.0' 'yt-dlp>=2024.4.9'
 
-      - name: Run the script
+      - name: Run the YouTube Monitor Script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # Ensure deno is in PATH
-          export DENO_INSTALL="/home/runner/.deno"
-          export PATH="$DENO_INSTALL/bin:$PATH"
-          python daily_filter.py
+          echo "Starting YouTube Monitor Script..."
+          echo "Python version: $(python --version)"
+          echo "Current directory: $(pwd)"
+          echo "Files in directory:"
+          ls -la
+          
+          # Run the Python script
+          python daily_filter.py 2>&1
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-monitor-logs
+          path: |
+            *.log
+            *.txt
+          retention-days: 7
+
+      - name: Send failure notification
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MESSAGE="❌ YouTube Monitor FAILED at $(date -u '+%Y-%m-%d %H:%M UTC')"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
