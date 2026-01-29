@@ -2,6 +2,7 @@ import os
 import requests
 import feedparser
 import time
+import re
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
 from google import genai
 from google.genai import types
@@ -68,7 +69,6 @@ def send_telegram_message(message_text):
         print("Telegram credentials missing, cannot send message.")
         return
 
-    # FIXED: Added /bot in the URL
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
     print(f"DEBUG: Telegram URL being used: https://api.telegram.org/bot[...hidden...]/sendMessage")
@@ -126,6 +126,34 @@ def analyze_transcript_with_gemini(transcript, keywords):
         print(f"Gemini analysis failed: {e}")
         return False
 
+def get_transcript_from_video_id(video_id):
+    """Get transcript for a YouTube video using the new YouTubeTranscriptApi method."""
+    try:
+        print(f"Connecting to YouTube for ID: {video_id}...")
+        
+        # Initialize API
+        api = YouTubeTranscriptApi()
+        
+        # Fetch transcript (Returns a list of FetchedTranscriptSnippet objects)
+        transcript_data = api.fetch(video_id)
+        
+        # Extract text from transcript data
+        full_text = " ".join([entry.text for entry in transcript_data])
+        
+        if full_text and len(full_text) > 50:
+            print(f"✓ Successfully fetched transcript ({len(full_text)} chars)")
+            return full_text
+        else:
+            print("✗ Transcript too short or empty")
+            return None
+            
+    except TranscriptsDisabled:
+        print("✗ Transcripts disabled for this video")
+        return None
+    except Exception as e:
+        print(f"✗ Error fetching transcript: {str(e)}")
+        return None
+
 def get_latest_videos(channel_id):
     """Fetches latest videos from RSS feed."""
     feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
@@ -163,21 +191,18 @@ def main():
         
         for video in latest_videos:
             try:
-                # Try to get transcript
-                transcript_list = YouTubeTranscriptApi.get_transcript(
-                    video['id'], 
-                    languages=['en', 'hi', 'en-US']
-                )
-                transcript_text = ' '.join([t['text'] for t in transcript_list])
+                # Get transcript using the new method
+                transcript_text = get_transcript_from_video_id(video['id'])
                 
-                if analyze_transcript_with_gemini(transcript_text, config["keywords"]):
-                    relevant_videos_summary.append(f"* [{video['title']}]({video['link']}) (Channel: {channel_name})")
-                    print(f"  > Matched: {video['title']}")
+                if transcript_text:
+                    if analyze_transcript_with_gemini(transcript_text, config["keywords"]):
+                        relevant_videos_summary.append(f"* [{video['title']}]({video['link']}) (Channel: {channel_name})")
+                        print(f"  > Matched: {video['title']}")
+                    else:
+                        print(f"  > Not relevant: {video['title']}")
                 else:
-                    print(f"  > Not relevant: {video['title']}")
+                    print(f"  > No transcript available: {video['title']}")
 
-            except TranscriptsDisabled:
-                print(f"  > Transcripts disabled for video {video['id']}, skipping analysis.")
             except Exception as e:
                 print(f"  > Error processing video {video['id']}: {type(e).__name__}")
 
