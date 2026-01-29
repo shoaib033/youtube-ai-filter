@@ -75,7 +75,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 print("=" * 80)
-print("YOUTUBE MONITOR WITH YT-DLP FALLBACK")
+print("YOUTUBE MONITOR - FINAL WORKING VERSION")
 print("=" * 80)
 
 def send_telegram_message(message_text):
@@ -106,66 +106,93 @@ def send_telegram_message(message_text):
         print(f"✗ Telegram API error: {e}")
         return False
 
-def get_transcript_ytdlp(video_id, video_title):
-    """Get transcript using yt-dlp (most reliable method)."""
+def get_transcript_ytdlp_fixed(video_id, video_title):
+    """Get transcript using yt-dlp with fixed command."""
     print(f"\n🎬 Getting transcript with yt-dlp: {video_title[:60]}...")
-    print(f"   Video ID: {video_id}")
     
     # Create temporary directory
     temp_dir = tempfile.mkdtemp()
-    output_template = os.path.join(temp_dir, f"%(id)s.%(ext)s")
     
     try:
-        # Build yt-dlp command
+        # FIXED: Use simpler command that works without JavaScript runtime
         cmd = [
             'yt-dlp',
-            '--write-auto-sub',           # Write auto-generated subtitles
-            '--convert-subs', 'srt',      # Convert to SRT format
-            '--skip-download',            # Don't download video
-            '--sub-lang', 'en,en-US,en-GB,hi',  # Preferred languages
-            '--output', output_template,
+            '--skip-download',
+            '--write-auto-sub',
+            '--sub-lang', 'en',
+            '--convert-subs', 'srt',
+            '--output', f'{temp_dir}/%(id)s',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
         
-        print(f"   Running: {' '.join(cmd[:5])}...")
+        print(f"   Running yt-dlp...")
         
         # Run yt-dlp
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60  # 60 second timeout
+            timeout=45
         )
         
         if result.returncode == 0:
-            # Look for subtitle files
-            srt_files = []
-            for ext in ['srt', 'vtt', 'ttml', 'json3']:
-                pattern = os.path.join(temp_dir, f"{video_id}*.{ext}")
-                import glob
-                srt_files.extend(glob.glob(pattern))
+            # Look for generated subtitle files
+            import glob
+            subtitle_files = glob.glob(f'{temp_dir}/{video_id}*.srt') + glob.glob(f'{temp_dir}/{video_id}*.vtt')
             
-            if srt_files:
+            if subtitle_files:
                 # Read the first subtitle file
-                srt_file = srt_files[0]
-                with open(srt_file, 'r', encoding='utf-8') as f:
-                    srt_content = f.read()
+                with open(subtitle_files[0], 'r', encoding='utf-8') as f:
+                    subtitle_content = f.read()
                 
-                # Parse SRT (simplified)
-                transcript = parse_srt_content(srt_content)
-                print(f"   ✓ Got transcript via yt-dlp ({len(transcript)} chars)")
-                return transcript
+                # Parse subtitles
+                transcript = parse_subtitle_content(subtitle_content)
+                if transcript:
+                    print(f"   ✓ Got transcript via yt-dlp ({len(transcript)} chars)")
+                    return transcript
+                else:
+                    print(f"   ✗ Could not parse subtitle content")
             else:
-                print(f"   ✗ No subtitle files generated")
+                # Check if yt-dlp created any files
+                all_files = glob.glob(f'{temp_dir}/*')
+                print(f"   ✗ No subtitle files found. Files in temp dir: {all_files}")
+                
         else:
-            print(f"   ✗ yt-dlp failed: {result.stderr[:200]}")
+            # Try alternative command without conversion
+            print(f"   Trying alternative method...")
+            cmd2 = [
+                'yt-dlp',
+                '--skip-download',
+                '--write-auto-sub',
+                '--sub-lang', 'en',
+                '--output', f'{temp_dir}/%(id)s',
+                f'https://www.youtube.com/watch?v={video_id}'
+            ]
+            
+            result2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=45)
+            
+            if result2.returncode == 0:
+                # Look for JSON subtitle files
+                json_files = glob.glob(f'{temp_dir}/{video_id}*.json*')
+                if json_files:
+                    try:
+                        with open(json_files[0], 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            transcript = ' '.join([event.get('segs', [{}])[0].get('utf8', '') for event in data.get('events', []) if event.get('segs')])
+                            if transcript:
+                                print(f"   ✓ Got transcript from JSON ({len(transcript)} chars)")
+                                return transcript
+                    except:
+                        pass
+            
+            print(f"   ✗ yt-dlp failed (return code: {result.returncode})")
             
     except subprocess.TimeoutExpired:
         print(f"   ✗ yt-dlp timeout")
     except Exception as e:
-        print(f"   ✗ yt-dlp error: {type(e).__name__}: {e}")
+        print(f"   ✗ yt-dlp error: {type(e).__name__}: {str(e)[:100]}")
     finally:
-        # Clean up temp directory
+        # Clean up
         try:
             shutil.rmtree(temp_dir)
         except:
@@ -173,55 +200,123 @@ def get_transcript_ytdlp(video_id, video_title):
     
     return None
 
-def parse_srt_content(srt_text):
-    """Parse SRT subtitle content to plain text."""
-    # Remove SRT timestamps and formatting
-    lines = srt_text.split('\n')
+def parse_subtitle_content(content):
+    """Parse subtitle content (SRT or VTT format)."""
+    lines = content.split('\n')
     text_lines = []
     
     for line in lines:
+        line = line.strip()
         # Skip timestamp lines and empty lines
-        if re.match(r'^\d+$', line) or '-->' in line or not line.strip():
+        if not line or '-->' in line or line.isdigit() or line.startswith('WEBVTT'):
             continue
-        # Skip HTML tags
+        # Remove HTML tags
         line = re.sub(r'<[^>]+>', '', line)
-        text_lines.append(line.strip())
+        if line:
+            text_lines.append(line)
     
     return ' '.join(text_lines)
 
-def get_transcript_youtube_api(video_id, video_title):
-    """Try youtube-transcript-api as secondary method."""
-    print(f"   Trying youtube-transcript-api...")
+def get_transcript_youtube_api_simple(video_id):
+    """Simple youtube-transcript-api fallback."""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
-        
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        transcript_text = ' '.join([t['text'] for t in transcript_list])
-        print(f"   ✓ Got transcript via youtube-transcript-api")
-        return transcript_text
-        
-    except ImportError:
-        print(f"   ✗ youtube-transcript-api not installed")
-    except (TranscriptsDisabled, NoTranscriptFound):
-        print(f"   ✗ No transcript available")
-    except Exception as e:
-        print(f"   ✗ Error: {type(e).__name__}")
-    
-    return None
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        return ' '.join([t['text'] for t in transcript])
+    except:
+        return None
 
-def get_transcript(video_id, video_title):
-    """Main function to get transcript - tries multiple methods."""
+def get_transcript_all_methods(video_id, video_title):
+    """Try all methods to get transcript."""
     print(f"\n🎬 Getting transcript for: {video_title[:60]}...")
     
-    # Method 1: Try yt-dlp first (most reliable)
-    transcript = get_transcript_ytdlp(video_id, video_title)
+    # Method 1: yt-dlp (most reliable)
+    transcript = get_transcript_ytdlp_fixed(video_id, video_title)
     
-    # Method 2: Try youtube-transcript-api as fallback
+    # Method 2: youtube-transcript-api
     if not transcript:
-        transcript = get_transcript_youtube_api(video_id, video_title)
+        print(f"   Trying youtube-transcript-api...")
+        transcript = get_transcript_youtube_api_simple(video_id)
+        if transcript:
+            print(f"   ✓ Got transcript via youtube-transcript-api")
+    
+    # Method 3: Try to get from video description/page
+    if not transcript:
+        transcript = get_transcript_from_page(video_id)
     
     return transcript
+
+def get_transcript_from_page(video_id):
+    """Try to extract transcript from video page."""
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            # Look for captions data in the page
+            html = response.text
+            
+            # Try to find caption tracks
+            import re
+            # Look for captionTracks JSON
+            pattern = r'"captionTracks":(\[.*?\])'
+            match = re.search(pattern, html)
+            
+            if match:
+                try:
+                    captions = json.loads(match.group(1))
+                    if captions:
+                        # Get English caption URL if available
+                        for caption in captions:
+                            if caption.get('languageCode', '').startswith('en'):
+                                caption_url = caption.get('baseUrl')
+                                if caption_url:
+                                    # Fetch caption data
+                                    caption_response = requests.get(caption_url, timeout=15)
+                                    if caption_response.status_code == 200:
+                                        # Parse XML captions
+                                        from xml.etree import ElementTree
+                                        root = ElementTree.fromstring(caption_response.content)
+                                        texts = [elem.text for elem in root.iter() if elem.text]
+                                        return ' '.join(filter(None, texts))
+                except:
+                    pass
+            
+            # Alternative: Look for ytInitialData
+            pattern2 = r'ytInitialData\s*=\s*({.*?});'
+            match2 = re.search(pattern2, html, re.DOTALL)
+            if match2:
+                try:
+                    data = json.loads(match2.group(1))
+                    # Navigate through the complex JSON to find captions
+                    # This is simplified - actual structure is complex
+                    import json
+                    # Try to find playerCaptionsTracklistRenderer
+                    def find_captions(obj):
+                        if isinstance(obj, dict):
+                            if 'playerCaptionsTracklistRenderer' in obj:
+                                return obj['playerCaptionsTracklistRenderer']
+                            for value in obj.values():
+                                result = find_captions(value)
+                                if result:
+                                    return result
+                        elif isinstance(obj, list):
+                            for item in obj:
+                                result = find_captions(item)
+                                if result:
+                                    return result
+                        return None
+                    
+                    captions_data = find_captions(data)
+                    if captions_data:
+                        print(f"   Found caption data in page")
+                except:
+                    pass
+    except:
+        pass
+    
+    return None
 
 def analyze_with_gemini(transcript, keywords, video_title):
     """Analyze content with Gemini."""
@@ -233,21 +328,19 @@ def analyze_with_gemini(transcript, keywords, video_title):
         client = genai.Client(api_key=GEMINI_API_KEY)
         keyword_list = ", ".join(keywords)
         
-        # Prepare prompt
+        # Limit transcript length
+        transcript_short = transcript[:5000] if len(transcript) > 5000 else transcript
+        
         prompt = f"""
         VIDEO TITLE: {video_title}
         
         TRANSCRIPT:
-        {transcript[:4000]}
+        {transcript_short}
         
-        QUESTION: Is the MAIN CONTENT of this video related to ANY of these topics?
+        QUESTION: Is this video related to ANY of these topics?
         Topics: {keyword_list}
         
-        IMPORTANT: Answer YES if the video discusses ANY of these topics significantly.
-        Be liberal in interpretation - if it's related even indirectly, say YES.
-        
         Respond with ONLY: {{"relevant": true}} or {{"relevant": false}}
-        No other text.
         """
         
         print(f"\n🤖 Analyzing with Gemini...")
@@ -264,12 +357,11 @@ def analyze_with_gemini(transcript, keywords, video_title):
         response_text = response.text.strip()
         print(f"   Gemini response: {response_text}")
         
-        # Parse response
         if '"relevant": true' in response_text or "'relevant': true" in response_text:
-            print("   ✅ Gemini: RELEVANT")
+            print("   ✅ RELEVANT")
             return True
         else:
-            print("   ❌ Gemini: NOT RELEVANT")
+            print("   ❌ NOT RELEVANT")
             return False
 
     except Exception as e:
@@ -277,29 +369,24 @@ def analyze_with_gemini(transcript, keywords, video_title):
         return False
 
 def check_title_relevance(video_title, keywords):
-    """Check if title suggests relevance (for fallback)."""
+    """Check if title suggests relevance."""
     title_lower = video_title.lower()
-    keywords_lower = [k.lower() for k in keywords]
     
-    # Check each keyword
-    for keyword in keywords_lower:
-        if keyword in title_lower:
+    # Direct keyword matches
+    for keyword in keywords:
+        if keyword.lower() in title_lower:
             return True
     
-    # Check for common variations
-    variations = {
-        'india-eu': ['india-eu', 'india eu', 'india europe', 'eu india'],
-        'trade agreement': ['trade agreement', 'trade deal', 'fta', 'free trade', 'trade pact'],
-        'budget': ['budget', 'union budget', 'economic survey', 'finance minister', 'fiscal'],
-        'economy': ['economy', 'economic', 'gdp', 'inflation', 'monetary', 'fiscal'],
-        'de-dollar': ['de-dollar', 'dedollar', 'de dollar', 'dollarisation', 'dollarization'],
-        'tax': ['tax', 'taxation', 'gst', 'income tax'],
-        'scheme': ['scheme', 'yojana', 'initiative', 'program', 'policy'],
-        'rbi': ['rbi', 'reserve bank', 'monetary policy', 'repo rate'],
-    }
+    # Common variations
+    variations = [
+        'budget', 'economy', 'economic', 'gdp', 'inflation', 'tax', 
+        'trade', 'fta', 'india-eu', 'india eu', 'de-dollar',
+        'rbi', 'reserve bank', 'monetary', 'fiscal', 'scheme',
+        'yojana', 'policy', 'government', 'survey'
+    ]
     
-    for base_term, variant_list in variations.items():
-        if any(variant in title_lower for variant in variant_list):
+    for term in variations:
+        if term in title_lower:
             return True
     
     return False
@@ -307,8 +394,6 @@ def check_title_relevance(video_title, keywords):
 def get_latest_videos(channel_id):
     """Fetch latest videos from RSS feed."""
     feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    
-    print(f"\n📡 Fetching videos for channel: {channel_id}")
     
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -318,7 +403,7 @@ def get_latest_videos(channel_id):
             feed = feedparser.parse(response.content)
             videos = []
             
-            for entry in feed.entries:
+            for entry in feed.entries[:15]:  # Limit to 15
                 try:
                     if hasattr(entry, 'published_parsed') and entry.published_parsed:
                         published_timestamp = time.mktime(entry.published_parsed)
@@ -336,7 +421,6 @@ def get_latest_videos(channel_id):
                 except:
                     continue
                     
-            print(f"   ✓ Found {len(videos)} videos from last 24 hours")
             return videos
             
     except Exception as e:
@@ -347,19 +431,18 @@ def get_latest_videos(channel_id):
 def main():
     """Main execution function."""
     print("\n" + "=" * 80)
-    print("STARTING DAILY YOUTUBE MONITOR")
+    print("STARTING YOUTUBE MONITOR")
     print("=" * 80)
     
-    # Check if yt-dlp is installed
-    print("Checking dependencies...")
+    # Test yt-dlp installation
+    print("Checking yt-dlp installation...")
     try:
-        subprocess.run(['yt-dlp', '--version'], capture_output=True, check=True)
-        print("✓ yt-dlp is installed")
+        result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True)
+        print(f"✓ yt-dlp version: {result.stdout.strip()}")
     except:
-        print("✗ yt-dlp is NOT installed. Transcripts may not work.")
+        print("✗ yt-dlp not found or not working")
     
-    # Send start notification
-    send_telegram_message("🔍 YouTube Daily Monitor Started")
+    send_telegram_message("🔍 YouTube Monitor Started")
     
     relevant_videos = []
     
@@ -369,7 +452,7 @@ def main():
         videos = get_latest_videos(config["id"])
         
         if not videos:
-            print(f"   ⚠️ No videos found in last 24 hours")
+            print(f"   No videos found")
             continue
             
         print(f"   Processing {len(videos)} videos...")
@@ -379,10 +462,10 @@ def main():
             print(f"📺 [{i+1}/{len(videos)}] {video['title']}")
             print(f"   Published: {video['published']}")
             
-            # Get transcript
-            transcript = get_transcript(video['id'], video['title'])
+            # Try to get transcript
+            transcript = get_transcript_all_methods(video['id'], video['title'])
             
-            if transcript:
+            if transcript and len(transcript) > 100:  # Need reasonable length
                 print(f"   ✓ Got transcript ({len(transcript)} chars)")
                 
                 # Analyze with Gemini
@@ -390,37 +473,33 @@ def main():
                 
                 if is_relevant:
                     relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name}")
-                    print(f"   ✅ ADDED (Gemini confirmed)")
+                    print(f"   ✅ ADDED (Transcript analyzed)")
                 else:
-                    print(f"   ❌ NOT RELEVANT (Gemini)")
+                    print(f"   ❌ NOT RELEVANT")
             else:
-                # No transcript available
-                print(f"   ⚠️ No transcript available")
-                
-                # Check title as last resort
+                # Fallback to title check
                 title_relevant = check_title_relevance(video['title'], config["keywords"])
                 
                 if title_relevant:
-                    print(f"   ⚠️ Title suggests relevance (adding with low confidence)")
-                    relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name} [Title match]")
-                    print(f"   ✅ ADDED (Title match only - low confidence)")
+                    print(f"   ⚠️ No transcript, but title suggests relevance")
+                    relevant_videos.append(f"• [{video['title']}]({video['link']}) - {channel_name} [Title]")
+                    print(f"   ✅ ADDED (Title only)")
                 else:
-                    print(f"   ❌ Title doesn't suggest relevance")
+                    print(f"   ❌ NOT RELEVANT (no transcript, title doesn't match)")
     
     print(f"\n{'='*80}")
-    print("DAILY SUMMARY")
+    print("SUMMARY")
     print(f"{'='*80}")
     print(f"Total relevant videos found: {len(relevant_videos)}")
     
     # Send results
     if relevant_videos:
-        # Limit message length
-        if len(relevant_videos) > 15:
-            message = f"🚨 **{len(relevant_videos)} Relevant YouTube Videos Found:**\n\n"
-            message += "\n".join(relevant_videos[:15])
-            message += f"\n\n... and {len(relevant_videos) - 15} more"
+        if len(relevant_videos) > 10:
+            message = f"🚨 **{len(relevant_videos)} Relevant Videos Found:**\n\n"
+            message += "\n".join(relevant_videos[:10])
+            message += f"\n\n... and {len(relevant_videos) - 10} more"
         else:
-            message = f"🚨 **{len(relevant_videos)} Relevant YouTube Videos Found:**\n\n"
+            message = f"🚨 **{len(relevant_videos)} Relevant Videos Found:**\n\n"
             message += "\n".join(relevant_videos)
         
         send_telegram_message(message)
