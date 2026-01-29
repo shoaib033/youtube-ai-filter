@@ -2,8 +2,6 @@ import os
 import requests
 import feedparser
 import time
-import re
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
 from google import genai
 from google.genai import types
 
@@ -91,8 +89,8 @@ def send_telegram_message(message_text):
     except Exception as e:
         print(f"Telegram API error: {e}")
 
-def analyze_transcript_with_gemini(transcript, keywords):
-    """Uses Gemini to determine if transcript is relevant to keywords."""
+def analyze_youtube_link_with_gemini(youtube_url, video_title, keywords, channel_name):
+    """Uses Gemini to analyze YouTube video directly from URL."""
     if not GEMINI_API_KEY:
         print("GEMINI_API_KEY not set, skipping analysis")
         return False
@@ -102,57 +100,42 @@ def analyze_transcript_with_gemini(transcript, keywords):
         keyword_list = ", ".join(keywords)
         
         prompt = f"""
-        Analyze the provided YouTube video transcript. Determine if the main topic of the video is directly related to any of the following: 
-        "{keyword_list}".
-
-        Respond with a simple JSON object: {{"relevant": true}} if relevant, or {{"relevant": false}} if not. 
-        Do not include any other text or explanation.
+        Analyze this YouTube video for relevance to Indian Economic Service (IES) and UPSC Economics preparation.
+        
+        VIDEO TITLE: "{video_title}"
+        CHANNEL: {channel_name}
+        YOUTUBE URL: {youtube_url}
+        
+        Check if this video discusses ANY of these topics:
+        {keyword_list}
+        
+        IMPORTANT: Consider the video's title, description, content, and context. 
+        This is for exam preparation, so focus on educational content about:
+        - Indian economy and economics
+        - Government schemes and policies
+        - Budget, trade, RBI, fiscal/monetary policy
+        - Economic concepts and explanations
+        
+        Respond with ONLY: RELEVANT or NOT_RELEVANT
         """
         
         response = client.models.generate_content(
             model='gemini-1.5-flash',
-            contents=[prompt, transcript],
+            contents=[prompt],
             config=types.GenerateContentConfig(
                 temperature=0.1,
-                max_output_tokens=50
+                max_output_tokens=20
             )
         )
         
-        # Simple parsing
-        response_text = response.text.lower().strip()
-        return '"relevant": true' in response_text or "'relevant': true" in response_text or "relevant: true" in response_text
+        response_text = response.text.strip().upper()
+        print(f"DEBUG: Gemini response: {response_text}")
+        
+        return "RELEVANT" in response_text
 
     except Exception as e:
         print(f"Gemini analysis failed: {e}")
         return False
-
-def get_transcript_from_video_id(video_id):
-    """Get transcript for a YouTube video using the new YouTubeTranscriptApi method."""
-    try:
-        print(f"Connecting to YouTube for ID: {video_id}...")
-        
-        # Initialize API
-        api = YouTubeTranscriptApi()
-        
-        # Fetch transcript (Returns a list of FetchedTranscriptSnippet objects)
-        transcript_data = api.fetch(video_id)
-        
-        # Extract text from transcript data
-        full_text = " ".join([entry.text for entry in transcript_data])
-        
-        if full_text and len(full_text) > 50:
-            print(f"✓ Successfully fetched transcript ({len(full_text)} chars)")
-            return full_text
-        else:
-            print("✗ Transcript too short or empty")
-            return None
-            
-    except TranscriptsDisabled:
-        print("✗ Transcripts disabled for this video")
-        return None
-    except Exception as e:
-        print(f"✗ Error fetching transcript: {str(e)}")
-        return None
 
 def get_latest_videos(channel_id):
     """Fetches latest videos from RSS feed."""
@@ -166,15 +149,11 @@ def get_latest_videos(channel_id):
                 published_timestamp = time.mktime(entry.published_parsed)
                 # Check if from last 24 hours
                 if time.time() - published_timestamp < 86400:
-                    # Extract video ID from URL
-                    video_link = entry.link
-                    if 'v=' in video_link:
-                        video_id = video_link.split('v=')[1].split('&')[0]
-                        videos.append({
-                            'title': entry.title,
-                            'link': entry.link,
-                            'id': video_id
-                        })
+                    videos.append({
+                        'title': entry.title,
+                        'link': entry.link,
+                        'id': entry.link.split('v=')[1].split('&')[0] if 'v=' in entry.link else None
+                    })
         except Exception as e:
             print(f"Error parsing video: {e}")
             continue
@@ -191,27 +170,22 @@ def main():
         
         for video in latest_videos:
             try:
-                # Get transcript using the new method
-                transcript_text = get_transcript_from_video_id(video['id'])
+                print(f"  Processing: {video['title'][:60]}...")
                 
-                if transcript_text:
-                    if analyze_transcript_with_gemini(transcript_text, config["keywords"]):
-                        relevant_videos_summary.append(f"* [{video['title']}]({video['link']}) (Channel: {channel_name})")
-                        print(f"  > Matched: {video['title']}")
-                    else:
-                        print(f"  > Not relevant: {video['title']}")
+                if analyze_youtube_link_with_gemini(video['link'], video['title'], config["keywords"], channel_name):
+                    relevant_videos_summary.append(f"* [{video['title']}]({video['link']}) (Channel: {channel_name})")
+                    print(f"  > Matched: {video['title']}")
                 else:
-                    print(f"  > No transcript available: {video['title']}")
+                    print(f"  > Not relevant: {video['title']}")
 
             except Exception as e:
-                print(f"  > Error processing video {video['id']}: {type(e).__name__}")
+                print(f"  > Error processing video: {type(e).__name__}")
 
     if relevant_videos_summary:
         message = "🚨 **New Relevant YouTube Videos Found:**\n\n" + "\n".join(relevant_videos_summary)
         send_telegram_message(message)
     else:
         print("No new relevant videos found in the last 24 hours.")
-        # Optional: Send a status message
         send_telegram_message("✅ No new relevant videos found in the last 24 hours.")
 
 if __name__ == "__main__":
