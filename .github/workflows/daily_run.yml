@@ -17,7 +17,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install system dependencies for yt-dlp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip python3-dev build-essential
+          sudo apt-get install -y ffmpeg  # Optional but useful
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install feedparser google-genai requests
@@ -25,26 +31,28 @@ jobs:
           # Install youtube-transcript-api
           pip install youtube-transcript-api
           
-          # Install yt-dlp (for reliable subtitle extraction)
-          pip install yt-dlp
+          # Install yt-dlp with proper dependencies
+          pip install yt-dlp[default]
+          
+          # Install Node.js (JavaScript runtime for yt-dlp)
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo apt-get install -y nodejs
           
           # Verify installations
-          echo "=== Checking installed packages ==="
+          echo "=== Checking installations ==="
           python -c "import feedparser; print('✓ feedparser')"
           python -c "import google.genai; print('✓ google-genai')"
           python -c "import requests; print('✓ requests')"
           
           # Check yt-dlp
-          yt-dlp --version || echo "✗ yt-dlp not found"
+          yt-dlp --version && echo "✓ yt-dlp"
           
-          # Check youtube-transcript-api
-          python -c "
-          try:
-              from youtube_transcript_api import YouTubeTranscriptApi
-              print('✓ youtube-transcript-api')
-          except ImportError as e:
-              print(f'✗ youtube-transcript-api: {e}')
-          "
+          # Check Node.js
+          node --version && echo "✓ Node.js"
+          
+          # Test yt-dlp with a simple command
+          echo "Testing yt-dlp..."
+          yt-dlp --skip-download --get-title "https://www.youtube.com/watch?v=dQw4w9WgXcQ" && echo "✓ yt-dlp works"
 
       - name: Run the script
         env:
