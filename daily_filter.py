@@ -3,6 +3,7 @@ import requests
 import feedparser
 import time
 from google import genai
+from google.genai import types  # Need this import
 
 # --- Configuration Section (ONLY 2 CHANNELS FOR TESTING) ---
 CHANNELS_TO_WATCH = {
@@ -84,10 +85,10 @@ def analyze_video_with_retry(youtube_url, video_title, keywords, channel_name, m
     RELEVANT TOPICS: {keywords_str}
     
     STRICT RULES:
-    1. Only mark as relevant if video is PRIMARILY about Indian economy, economics, or economic policy
-    2. Must be educational content for IES/UPSC Economics preparation
-    3. Must cover specific economic topics from the list above
-    4. REJECT general news, ceremonies, cultural events, shorts, entertainment
+    1. Only mark as relevant if video is PRIMARILY about Indian economy, economics, or economic policy, OR
+    2. Must be educational content for IES/UPSC Economics preparation, OR
+    3. Must cover specific economic topics from the list above, and
+    4. REJECT general non-economics related news, ceremonies, cultural events, shorts, entertainment, sports
     
     Respond with ONLY a single digit: 
     1 if RELEVANT
@@ -98,15 +99,17 @@ def analyze_video_with_retry(youtube_url, video_title, keywords, channel_name, m
         try:
             print(f"  🤖 Attempt {attempt + 1}: Analyzing with Gemini...")
             
+            # CORRECT API CALL: Use config parameter instead of generation_config
             response = client.models.generate_content(
                 model="gemini-2.0-flash", 
                 contents=prompt,
-                generation_config={
-                    "temperature": 0.1,
-                    "max_output_tokens": 5,  # Very short response
-                }
+                config=types.GenerateContentConfig(  # Changed to config
+                    temperature=0.1,
+                    max_output_tokens=5,  # Very short response
+                )
             )
             
+            # Get the response text
             response_text = response.text.strip()
             print(f"  Raw Gemini response: '{response_text}'")
             
