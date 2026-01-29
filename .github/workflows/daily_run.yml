@@ -17,42 +17,30 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system dependencies for yt-dlp
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip python3-dev build-essential
-          sudo apt-get install -y ffmpeg  # Optional but useful
+          sudo apt-get install -y python3-pip python3-dev curl
+          # Install deno for yt-dlp JavaScript runtime
+          curl -fsSL https://deno.land/install.sh | sh
+          export DENO_INSTALL="/home/runner/.deno"
+          export PATH="$DENO_INSTALL/bin:$PATH"
+          echo "DENO_INSTALL=$DENO_INSTALL" >> $GITHUB_ENV
+          echo "$DENO_INSTALL/bin" >> $GITHUB_PATH
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install feedparser google-genai requests
-          
-          # Install youtube-transcript-api
-          pip install youtube-transcript-api
-          
-          # Install yt-dlp with proper dependencies
-          pip install yt-dlp[default]
-          
-          # Install Node.js (JavaScript runtime for yt-dlp)
-          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-          sudo apt-get install -y nodejs
+          pip install yt-dlp
           
           # Verify installations
           echo "=== Checking installations ==="
           python -c "import feedparser; print('✓ feedparser')"
           python -c "import google.genai; print('✓ google-genai')"
           python -c "import requests; print('✓ requests')"
-          
-          # Check yt-dlp
           yt-dlp --version && echo "✓ yt-dlp"
-          
-          # Check Node.js
-          node --version && echo "✓ Node.js"
-          
-          # Test yt-dlp with a simple command
-          echo "Testing yt-dlp..."
-          yt-dlp --skip-download --get-title "https://www.youtube.com/watch?v=dQw4w9WgXcQ" && echo "✓ yt-dlp works"
+          deno --version && echo "✓ deno"
 
       - name: Run the script
         env:
@@ -60,4 +48,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          # Ensure deno is in PATH
+          export DENO_INSTALL="/home/runner/.deno"
+          export PATH="$DENO_INSTALL/bin:$PATH"
           python daily_filter.py
