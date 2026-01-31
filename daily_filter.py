@@ -9,7 +9,25 @@ from google.genai import types
 CHANNELS_TO_WATCH = {
     "Mint": {
         "id": "UCUI9vm69ZbAqRK3q3vKLWCQ",
-        "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi"]
+        "keywords": ["Indian economy", "economics", "india international trade", "india government schemes", "tax", "gdp", "inflation", "budget", "economic survey", "rbi"],
+        # ADDED: Title matching keywords for Mint channel only
+        "title_keywords": [
+            "economy", "economic", "gdp", "inflation", "budget", "tax", "taxation", "taxes",
+            "trade", "rbi", "finance", "financial", "fiscal", "monetary", "commerce", 
+            "export", "import", "currency", "dollar", "imf", "forex", "foreign exchange",
+            "economic survey", "union budget", "finance minister", "trade deal", "fta",
+            "free trade agreement", "gdp growth", "growth", "economic growth", "growth rate",
+            "inflation rate", "banking", "banks", "investment", "investments", "infrastructure",
+            "subsidy", "subsidies", "deficit", "surplus", "foreign policy", "economic policy",
+            "monetary policy", "fiscal policy", "gold", "price", "prices", "pricing", "market",
+            "markets", "sector", "sectors", "economic", "economics", "economist", "economists",
+            "budgetary", "budgeting", "budgets", "tax", "taxed", "taxing", "taxable", "taxpayer", "taxpayers",
+            "trade", "trading", "trader", "traders", "trades", "finance", "financing", "finances", "financials",
+            "market", "marketing", "marketplace", "marketplaces", "sector", "sectoral", "sector-wise",
+            "growth", "growing", "grows", "grew", "price", "priced", "pricing", "prices",
+            "अर्थव्यवस्था", "बजट", "जीडीपी", "मुद्रास्फीति", "कर", "व्यापार",
+            "वित्त", "आर्थिक", "योजना", "नीति", "सरकार", "सोना", "मूल्य", "बाजार", "क्षेत्र"
+        ]
     },
     "Mrunal Unacedmy": {
         "id": "UCwDfgcUkKKTxPozU9UnQ8Pw",
@@ -87,6 +105,16 @@ def send_telegram_message(message_text):
     except Exception as e:
         print(f"✗ Telegram API error: {e}")
         return False
+
+# --- ADDED: Title matching function for Mint channel only ---
+def passes_title_match(video_title, title_keywords):
+    """Check if video title contains any economic keywords (case-insensitive)."""
+    title_lower = video_title.lower()
+    
+    for keyword in title_keywords:
+        if keyword.lower() in title_lower:
+            return True
+    return False
 
 def analyze_video_with_retry(youtube_url, video_title, keywords, channel_name, max_retries=3):
     """Analyze YouTube video link using Gemini with retry logic."""
@@ -204,12 +232,13 @@ def get_latest_videos(channel_id, max_videos=15):
 def main():
     """Main execution function."""
     print("\n" + "="*60)
-    print("YOUTUBE MONITOR - ALL CHANNELS - SINGLE FINAL REPORT")
+    print("YOUTUBE MONITOR - MINT HAS TITLE MATCHING FILTER")
     print("="*60)
     
     total_videos_processed = 0
     relevant_videos = []
     failed_videos = []
+    title_filtered_videos = 0  # Track videos filtered by title match
     
     for channel_name, config in CHANNELS_TO_WATCH.items():
         print(f"\n🔍 Checking: {channel_name}")
@@ -222,9 +251,17 @@ def main():
         print(f"  Found {len(latest_videos)} recent videos")
         
         for i, video in enumerate(latest_videos):
-            total_videos_processed += 1
             print(f"\n  📺 [{i+1}/{len(latest_videos)}] {video['title'][:70]}...")
             print(f"  📅 Published: {video['published']}")
+            
+            # --- ADDED: Title matching filter for Mint channel only ---
+            if channel_name == "Mint" and "title_keywords" in config:
+                if not passes_title_match(video['title'], config["title_keywords"]):
+                    print(f"  ⏭️  SKIPPED - No economic keywords in title")
+                    title_filtered_videos += 1
+                    continue  # Skip to next video without Gemini analysis
+            
+            total_videos_processed += 1
             
             # Analyze with Gemini
             status, gemini_response = analyze_video_with_retry(
@@ -254,6 +291,7 @@ def main():
     print("ANALYSIS COMPLETE - GENERATING FINAL REPORT")
     print(f"{'='*60}")
     print(f"Total videos processed: {total_videos_processed}")
+    print(f"Videos filtered by title (Mint only): {title_filtered_videos}")
     print(f"Relevant videos found: {len(relevant_videos)}")
     print(f"Failed analyses: {len(failed_videos)}")
     
@@ -266,6 +304,7 @@ def main():
         message += f"\n\n📊 *Statistics:*"
         message += f"\n• Channels checked: {len(CHANNELS_TO_WATCH)}"
         message += f"\n• Videos analyzed: {total_videos_processed}"
+        message += f"\n• Filtered by title (Mint): {title_filtered_videos}"
         message += f"\n• Relevant found: {len(relevant_videos)}"
         message += f"\n• Failed analyses: {len(failed_videos)}"
         
@@ -288,6 +327,7 @@ def main():
 📊 *Statistics:*
 • Channels checked: {len(CHANNELS_TO_WATCH)}
 • Videos analyzed: {total_videos_processed}
+• Filtered by title (Mint): {title_filtered_videos}
 • Relevant found: 0
 • Failed analyses: {len(failed_videos)}
 
